@@ -141,8 +141,13 @@ class SolanaTradingBot:
             df['rsi'] = ta.rsi(df['close'], length=14)
             df['rsi_slow'] = ta.rsi(df['close'], length=21)
             
-            # MACD - handle potential tuple return
+            # MACD - handle potential tuple return and None values
             try:
+                # Check if close prices contain None values
+                if df['close'].isna().any():
+                    logger.warning("NaN values found in close prices, filling with forward fill")
+                    df['close'] = df['close'].fillna(method='ffill')
+                
                 macd = ta.macd(df['close'])
                 if isinstance(macd, tuple):
                     # If macd returns a tuple, extract the components
@@ -154,6 +159,11 @@ class SolanaTradingBot:
                     df['MACD_12_26_9'] = macd['MACD_12_26_9']
                     df['MACDs_12_26_9'] = macd['MACDs_12_26_9']
                     df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
+                
+                # Fill any NaN values in MACD columns
+                df['MACD_12_26_9'] = df['MACD_12_26_9'].fillna(0)
+                df['MACDs_12_26_9'] = df['MACDs_12_26_9'].fillna(0)
+                df['MACDh_12_26_9'] = df['MACDh_12_26_9'].fillna(0)
             except Exception as e:
                 logger.warning(f"Error calculating MACD: {e}")
                 # Set default values
@@ -169,6 +179,11 @@ class SolanaTradingBot:
                 df['BBL_20_2.0'] = sma_20 - (std_20 * 2)
                 df['BBM_20_2.0'] = sma_20
                 df['BBU_20_2.0'] = sma_20 + (std_20 * 2)
+                
+                # Fill NaN values
+                df['BBL_20_2.0'] = df['BBL_20_2.0'].fillna(df['close'])
+                df['BBM_20_2.0'] = df['BBM_20_2.0'].fillna(df['close'])
+                df['BBU_20_2.0'] = df['BBU_20_2.0'].fillna(df['close'])
             except Exception as e:
                 logger.warning(f"Error calculating Bollinger Bands: {e}")
                 # Set default values
@@ -184,6 +199,11 @@ class SolanaTradingBot:
                 df['BBL_50_2.0'] = sma_50 - (std_50 * 2)
                 df['BBM_50_2.0'] = sma_50
                 df['BBU_50_2.0'] = sma_50 + (std_50 * 2)
+                
+                # Fill NaN values
+                df['BBL_50_2.0'] = df['BBL_50_2.0'].fillna(df['close'])
+                df['BBM_50_2.0'] = df['BBM_50_2.0'].fillna(df['close'])
+                df['BBU_50_2.0'] = df['BBU_50_2.0'].fillna(df['close'])
             except Exception as e:
                 logger.warning(f"Error calculating Bollinger Bands 50: {e}")
                 # Set default values
@@ -200,9 +220,14 @@ class SolanaTradingBot:
             df['ema_50'] = ta.ema(df['close'], length=50)
             df['ema_200'] = ta.ema(df['close'], length=200)
             
+            # Fill NaN values in moving averages
+            for col in ['sma_20', 'sma_50', 'sma_200', 'ema_9', 'ema_21', 'ema_50', 'ema_200']:
+                df[col] = df[col].fillna(df['close'])
+            
             # Volume indicators
             df['volume_sma'] = ta.sma(df['volume'], length=20)
             df['volume_ratio'] = df['volume'] / df['volume_sma']
+            df['volume_ratio'] = df['volume_ratio'].fillna(1.0)  # Default to 1.0 if NaN
             
             # Trend indicators with fixed ADX calculation
             try:
@@ -222,6 +247,11 @@ class SolanaTradingBot:
                         df['adx'] = adx_indicator['ADX']
                         df['dmi_plus'] = adx_indicator['DMP']
                         df['dmi_minus'] = adx_indicator['DMN']
+                
+                # Fill NaN values
+                df['adx'] = df['adx'].fillna(0)
+                df['dmi_plus'] = df['dmi_plus'].fillna(0)
+                df['dmi_minus'] = df['dmi_minus'].fillna(0)
             except Exception as e:
                 logger.warning(f"Error calculating ADX: {e}")
                 # Set default values
@@ -244,6 +274,10 @@ class SolanaTradingBot:
                         # Try alternative column names
                         df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk']
                         df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId']
+                
+                # Fill NaN values
+                df['STOCHRSIk_14_14_3_3'] = df['STOCHRSIk_14_14_3_3'].fillna(50)
+                df['STOCHRSId_14_14_3_3'] = df['STOCHRSId_14_14_3_3'].fillna(50)
             except Exception as e:
                 logger.warning(f"Error calculating Stochastic RSI: {e}")
                 # Set default values
@@ -264,6 +298,10 @@ class SolanaTradingBot:
                 df['ITS_9'] = df['ISA_9'].shift(26)
                 df['IKS_26'] = df['ISB_26'].shift(26)
                 df['ICS_26'] = (df['high'] + df['low']) / 2
+                
+                # Fill NaN values
+                for col in ['ISA_9', 'ISB_26', 'ITS_9', 'IKS_26', 'ICS_26']:
+                    df[col] = df[col].fillna(df['close'])
             except Exception as e:
                 logger.warning(f"Error calculating Ichimoku Cloud: {e}")
                 # Set default values
@@ -290,6 +328,10 @@ class SolanaTradingBot:
                 df['fib_0.5'] = recent_low + price_range * 0.5
                 df['fib_0.618'] = recent_low + price_range * 0.618
                 df['fib_0.786'] = recent_low + price_range * 0.786
+                
+                # Fill NaN values
+                for col in ['fib_0.236', 'fib_0.382', 'fib_0.5', 'fib_0.618', 'fib_0.786']:
+                    df[col] = df[col].fillna(df['close'])
             except Exception as e:
                 logger.error(f"Error calculating Fibonacci levels: {e}")
                 # Set default values to avoid None errors
@@ -308,10 +350,14 @@ class SolanaTradingBot:
                 ranges = pd.concat([high_low, high_close, low_close], axis=1)
                 true_range = ranges.max(axis=1)
                 df['atr'] = true_range.rolling(window=14).mean()
+                
+                # Fill NaN values
+                df['atr'] = df['atr'].fillna(df['close'].rolling(window=14).std())
             except Exception as e:
                 logger.warning(f"Error calculating ATR: {e}")
                 # Set default values
                 df['atr'] = df['close'].rolling(window=14).std()
+                df['atr'] = df['atr'].fillna(df['close'].std())
             
             # Price changes
             df['price_change'] = df['close'].pct_change()
@@ -319,8 +365,13 @@ class SolanaTradingBot:
             df['price_change_4h'] = df['close'].pct_change(periods=4)
             df['price_change_1d'] = df['close'].pct_change(periods=24)
             
+            # Fill NaN values in price changes
+            for col in ['price_change', 'price_change_1h', 'price_change_4h', 'price_change_1d']:
+                df[col] = df[col].fillna(0)
+            
             # Volatility
             df['volatility'] = df['close'].rolling(window=20).std() / df['close'].rolling(window=20).mean()
+            df['volatility'] = df['volatility'].fillna(0)
             
             # Fill NaN values with 0 to avoid None errors
             df = df.fillna(0)
