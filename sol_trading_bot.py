@@ -428,6 +428,130 @@ class SolanaTradingBot:
                     pass
                 await asyncio.sleep(60)
 
+    def fetch_ohlcv_data(self, pair):
+        """Fetch OHLCV data from the exchange for a specific pair"""
+        try:
+            # Fetch multiple timeframes for better context
+            ohlcv_1h = self.exchange.fetch_ohlcv(pair, '1h', limit=100)
+            ohlcv_4h = self.exchange.fetch_ohlcv(pair, '4h', limit=50)
+            ohlcv_1d = self.exchange.fetch_ohlcv(pair, '1d', limit=30)
+            
+            # Convert to DataFrames
+            df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df_1d = pd.DataFrame(ohlcv_1d, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # Convert timestamps
+            for df in [df_1h, df_4h, df_1d]:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+            
+            return df_1h, df_4h, df_1d
+        except Exception as e:
+            logger.error(f"Error fetching data for {pair}: {e}")
+            return None, None, None
+
+    async def send_telegram_message(self, message):
+        """Send notification via Telegram with improved error handling"""
+        try:
+            if not self.chat_id:
+                logger.error("No Telegram chat ID configured")
+                return
+                
+            await self.telegram_bot.send_message(
+                chat_id=self.chat_id, 
+                text=message,
+                parse_mode='HTML'
+            )
+            logger.info(f"Telegram message sent: {message[:50]}...")
+        except Exception as e:
+            logger.error(f"Error sending Telegram message: {e}")
+
+    def _train_ml_model(self, pair, model_path, scaler_path):
+        """Train the machine learning model for a specific pair"""
+        try:
+            logger.info(f"Starting ML model training for {pair}")
+            
+            # Fetch historical data
+            historical_data = self.fetch_historical_data_for_training(pair, days=60)  # 60 days of data
+            if historical_data is None or len(historical_data) < 100:
+                logger.error(f"Not enough historical data for {pair} ML training")
+                return
+            
+            # Calculate indicators
+            df = self.calculate_indicators(historical_data)
+            if df is None:
+                logger.error(f"Failed to calculate indicators for {pair} ML training")
+                return
+            
+            # Prepare features
+            X, y, feature_columns = self.prepare_ml_features(df)
+            
+            # Split data into training and validation sets
+            train_size = int(len(X) * 0.8)
+            X_train, X_val = X[:train_size], X[train_size:]
+            y_train, y_val = y[:train_size], y[train_size:]
+            
+            # Scale features
+            self.scalers[pair] = StandardScaler()
+            X_train_scaled = self.scalers[pair].fit_transform(X_train)
+            X_val_scaled = self.scalers[pair].transform(X_val)
+            
+            # Train model
+            self.ml_models[pair] = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=10,
+                random_state=42,
+                class_weight='balanced'
+            )
+            
+            self.ml_models[pair].fit(X_train_scaled, y_train)
+            
+            # Evaluate model
+            train_accuracy = self.ml_models[pair].score(X_train_scaled, y_train)
+            val_accuracy = self.ml_models[pair].score(X_val_scaled, y_val)
+            
+            logger.info(f"ML model trained for {pair}. Train accuracy: {train_accuracy:.4f}, Validation accuracy: {val_accuracy:.4f}")
+            
+            # Save model and scaler
+            joblib.dump(self.ml_models[pair], model_path)
+            joblib.dump(self.scalers[pair], scaler_path)
+            
+            logger.info(f"ML model and scaler saved for {pair}")
+            
+        except Exception as e:
+            logger.error(f"Error training ML model for {pair}: {e}")
+            self.ml_models[pair] = None
+            self.scalers[pair] = None
+
+    def fetch_historical_data_for_training(self, pair, days=30):
+        """Fetch historical data for training the ML model for a specific pair"""
+        try:
+            logger.info(f"Fetching {days} days of historical data for {pair} ML training")
+            
+            # Calculate timestamps
+            end_time = int(time.time() * 1000)
+            start_time = end_time - (days * 24 * 60 * 60 * 1000)
+            
+            # Fetch historical data
+            historical_data = self.exchange.fetch_ohlcv(
+                pair, 
+                self.timeframe, 
+                since=start_time,
+                limit=1000
+            )
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            logger.info(f"Fetched {len(df)} historical candles for {pair} ML training")
+            return df
+        except Exception as e:
+            logger.error(f"Error fetching historical data for {pair}: {e}")
+            return None
+
 if __name__ == "__main__":
     try:
         bot = SolanaTradingBot()
