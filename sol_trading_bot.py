@@ -130,27 +130,51 @@ class SolanaTradingBot:
     def calculate_indicators(self, df):
         """Calculate technical indicators with improved error handling"""
         try:
+            if df is None or df.empty:
+                logger.error("Empty or None DataFrame provided to calculate_indicators")
+                return None
+                
+            # Make a copy to avoid modifying the original
+            df = df.copy()
+            
             # RSI with multiple timeframes
             df['rsi'] = ta.rsi(df['close'], length=14)
             df['rsi_slow'] = ta.rsi(df['close'], length=21)
             
-            # MACD
+            # MACD - handle potential tuple return
             macd = ta.macd(df['close'])
-            df['MACD_12_26_9'] = macd['MACD_12_26_9']
-            df['MACDs_12_26_9'] = macd['MACDs_12_26_9']
-            df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
+            if isinstance(macd, tuple):
+                # If macd returns a tuple, extract the components
+                df['MACD_12_26_9'] = macd[0]
+                df['MACDs_12_26_9'] = macd[1]
+                df['MACDh_12_26_9'] = macd[2]
+            else:
+                # If macd returns a DataFrame
+                df['MACD_12_26_9'] = macd['MACD_12_26_9']
+                df['MACDs_12_26_9'] = macd['MACDs_12_26_9']
+                df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
             
-            # Bollinger Bands
+            # Bollinger Bands - handle potential tuple return
             bb = ta.bbands(df['close'])
-            df['BBL_20_2.0'] = bb['BBL_20_2.0']
-            df['BBM_20_2.0'] = bb['BBM_20_2.0']
-            df['BBU_20_2.0'] = bb['BBU_20_2.0']
+            if isinstance(bb, tuple):
+                df['BBL_20_2.0'] = bb[0]
+                df['BBM_20_2.0'] = bb[1]
+                df['BBU_20_2.0'] = bb[2]
+            else:
+                df['BBL_20_2.0'] = bb['BBL_20_2.0']
+                df['BBM_20_2.0'] = bb['BBM_20_2.0']
+                df['BBU_20_2.0'] = bb['BBU_20_2.0']
             
             # Additional Bollinger Bands with different settings
             bb_50 = ta.bbands(df['close'], length=50)
-            df['BBL_50_2.0'] = bb_50['BBL_50_2.0']
-            df['BBM_50_2.0'] = bb_50['BBM_50_2.0']
-            df['BBU_50_2.0'] = bb_50['BBU_50_2.0']
+            if isinstance(bb_50, tuple):
+                df['BBL_50_2.0'] = bb_50[0]
+                df['BBM_50_2.0'] = bb_50[1]
+                df['BBU_50_2.0'] = bb_50[2]
+            else:
+                df['BBL_50_2.0'] = bb_50['BBL_50_2.0']
+                df['BBM_50_2.0'] = bb_50['BBM_50_2.0']
+                df['BBU_50_2.0'] = bb_50['BBU_50_2.0']
             
             # Moving Averages
             df['sma_20'] = ta.sma(df['close'], length=20)
@@ -158,6 +182,8 @@ class SolanaTradingBot:
             df['sma_200'] = ta.sma(df['close'], length=200)
             df['ema_9'] = ta.ema(df['close'], length=9)
             df['ema_21'] = ta.ema(df['close'], length=21)
+            df['ema_50'] = ta.ema(df['close'], length=50)
+            df['ema_200'] = ta.ema(df['close'], length=200)
             
             # Volume indicators
             df['volume_sma'] = ta.sma(df['volume'], length=20)
@@ -165,37 +191,71 @@ class SolanaTradingBot:
             
             # Trend indicators with fixed ADX calculation
             adx_indicator = ta.adx(df['high'], df['low'], df['close'], length=14)
-            df['adx'] = adx_indicator['ADX_14']
-            df['dmi_plus'] = adx_indicator['DMP_14']
-            df['dmi_minus'] = adx_indicator['DMN_14']
+            if isinstance(adx_indicator, tuple):
+                df['adx'] = adx_indicator[0]
+                df['dmi_plus'] = adx_indicator[1]
+                df['dmi_minus'] = adx_indicator[2]
+            else:
+                df['adx'] = adx_indicator['ADX_14']
+                df['dmi_plus'] = adx_indicator['DMP_14']
+                df['dmi_minus'] = adx_indicator['DMN_14']
             
-            # Stochastic RSI
+            # Stochastic RSI - handle potential tuple return
             stoch_rsi = ta.stochrsi(df['close'])
-            df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk_14_14_3_3']
-            df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId_14_14_3_3']
+            if isinstance(stoch_rsi, tuple):
+                df['STOCHRSIk_14_14_3_3'] = stoch_rsi[0]
+                df['STOCHRSId_14_14_3_3'] = stoch_rsi[1]
+            else:
+                df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk_14_14_3_3']
+                df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId_14_14_3_3']
             
-            # Ichimoku Cloud
+            # Ichimoku Cloud - handle potential tuple return
             ichimoku = ta.ichimoku(df['high'], df['low'], df['close'])
-            df['ISA_9'] = ichimoku['ISA_9']
-            df['ISB_26'] = ichimoku['ISB_26']
-            df['ITS_9'] = ichimoku['ITS_9']
-            df['IKS_26'] = ichimoku['IKS_26']
-            df['ICS_26'] = ichimoku['ICS_26']
+            if isinstance(ichimoku, tuple):
+                df['ISA_9'] = ichimoku[0]
+                df['ISB_26'] = ichimoku[1]
+                df['ITS_9'] = ichimoku[2]
+                df['IKS_26'] = ichimoku[3]
+                df['ICS_26'] = ichimoku[4]
+            else:
+                df['ISA_9'] = ichimoku['ISA_9']
+                df['ISB_26'] = ichimoku['ISB_26']
+                df['ITS_9'] = ichimoku['ITS_9']
+                df['IKS_26'] = ichimoku['IKS_26']
+                df['ICS_26'] = ichimoku['ICS_26']
             
-            # Fibonacci Retracement levels
-            recent_high = df['high'].rolling(window=20).max().iloc[-1]
-            recent_low = df['low'].rolling(window=20).min().iloc[-1]
-            price_range = recent_high - recent_low
+            # Fibonacci Retracement levels - handle potential None values
+            try:
+                recent_high = df['high'].rolling(window=20).max().iloc[-1]
+                recent_low = df['low'].rolling(window=20).min().iloc[-1]
+                
+                if pd.isna(recent_high) or pd.isna(recent_low):
+                    logger.warning("NaN values in high/low for Fibonacci calculation")
+                    recent_high = df['high'].max()
+                    recent_low = df['low'].min()
+                
+                price_range = recent_high - recent_low
+                
+                df['fib_0.236'] = recent_low + price_range * 0.236
+                df['fib_0.382'] = recent_low + price_range * 0.382
+                df['fib_0.5'] = recent_low + price_range * 0.5
+                df['fib_0.618'] = recent_low + price_range * 0.618
+                df['fib_0.786'] = recent_low + price_range * 0.786
+            except Exception as e:
+                logger.error(f"Error calculating Fibonacci levels: {e}")
+                # Set default values to avoid None errors
+                df['fib_0.236'] = df['close'].mean() * 0.95
+                df['fib_0.382'] = df['close'].mean() * 0.97
+                df['fib_0.5'] = df['close'].mean()
+                df['fib_0.618'] = df['close'].mean() * 1.03
+                df['fib_0.786'] = df['close'].mean() * 1.05
             
-            df['fib_0.236'] = recent_low + price_range * 0.236
-            df['fib_0.382'] = recent_low + price_range * 0.382
-            df['fib_0.5'] = recent_low + price_range * 0.5
-            df['fib_0.618'] = recent_low + price_range * 0.618
-            df['fib_0.786'] = recent_low + price_range * 0.786
-            
-            # ATR for volatility
+            # ATR for volatility - handle potential tuple return
             atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-            df['atr'] = atr['ATR_14']
+            if isinstance(atr, tuple):
+                df['atr'] = atr[0]
+            else:
+                df['atr'] = atr['ATR_14']
             
             # Price changes
             df['price_change'] = df['close'].pct_change()
@@ -205,6 +265,9 @@ class SolanaTradingBot:
             
             # Volatility
             df['volatility'] = df['close'].rolling(window=20).std() / df['close'].rolling(window=20).mean()
+            
+            # Fill NaN values with 0 to avoid None errors
+            df = df.fillna(0)
             
             return df
         except Exception as e:
