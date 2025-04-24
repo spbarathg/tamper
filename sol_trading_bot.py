@@ -13,6 +13,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 import joblib
 import pickle
+from typing import List
 
 # Configure logging
 logging.basicConfig(
@@ -48,10 +49,30 @@ class SolanaTradingBot:
         except Exception as e:
             raise ValueError(f"Failed to initialize exchange: {e}")
         
-        # Initialize Telegram bot
+        # Initialize and validate Telegram bot
         try:
             self.telegram_bot = telegram.Bot(token=os.getenv('TELEGRAM_BOT_TOKEN'))
             self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+            
+            # Validate chat ID format and type
+            try:
+                chat_id_int = int(self.chat_id)
+                if chat_id_int < 0:  # Group chat IDs are negative
+                    logger.info("Using group chat ID for Telegram notifications")
+                else:
+                    logger.info("Using personal chat ID for Telegram notifications")
+            except ValueError:
+                raise ValueError("Telegram chat ID must be a valid integer")
+                
+            # Test Telegram configuration
+            asyncio.get_event_loop().run_until_complete(
+                self.telegram_bot.send_message(
+                    chat_id=self.chat_id,
+                    text="🔄 Trading bot initialization test message"
+                )
+            )
+            logger.info("Telegram configuration validated successfully")
+            
         except Exception as e:
             raise ValueError(f"Failed to initialize Telegram bot: {e}")
         
@@ -83,7 +104,7 @@ class SolanaTradingBot:
         
         # Initialize models for each pair
         for pair in self.trading_pairs:
-            self.active_pairs[pair] = None  # No position
+            self.active_pairs[pair] = None  # Initialize with no position
             self.signal_history[pair] = []
             model_path = f"{pair.replace('/', '_')}_ml_model.pkl"
             scaler_path = f"{pair.replace('/', '_')}_scaler.pkl"
@@ -113,17 +134,23 @@ class SolanaTradingBot:
             df['rsi'] = ta.rsi(df['close'], length=14)
             df['rsi_slow'] = ta.rsi(df['close'], length=21)
             
-            # MACD with multiple settings
+            # MACD
             macd = ta.macd(df['close'])
-            df = pd.concat([df, macd], axis=1)
+            df['MACD_12_26_9'] = macd['MACD_12_26_9']
+            df['MACDs_12_26_9'] = macd['MACDs_12_26_9']
+            df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
             
-            # Bollinger Bands with multiple settings
-            bollinger = ta.bbands(df['close'])
-            df = pd.concat([df, bollinger], axis=1)
+            # Bollinger Bands
+            bb = ta.bbands(df['close'])
+            df['BBL_20_2.0'] = bb['BBL_20_2.0']
+            df['BBM_20_2.0'] = bb['BBM_20_2.0']
+            df['BBU_20_2.0'] = bb['BBU_20_2.0']
             
             # Additional Bollinger Bands with different settings
-            bollinger_50 = ta.bbands(df['close'], length=50)
-            df = pd.concat([df, bollinger_50], axis=1)
+            bb_50 = ta.bbands(df['close'], length=50)
+            df['BBL_50_2.0'] = bb_50['BBL_50_2.0']
+            df['BBM_50_2.0'] = bb_50['BBM_50_2.0']
+            df['BBU_50_2.0'] = bb_50['BBU_50_2.0']
             
             # Moving Averages
             df['sma_20'] = ta.sma(df['close'], length=20)
@@ -144,11 +171,16 @@ class SolanaTradingBot:
             
             # Stochastic RSI
             stoch_rsi = ta.stochrsi(df['close'])
-            df = pd.concat([df, stoch_rsi], axis=1)
+            df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk_14_14_3_3']
+            df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId_14_14_3_3']
             
             # Ichimoku Cloud
             ichimoku = ta.ichimoku(df['high'], df['low'], df['close'])
-            df = pd.concat([df, ichimoku], axis=1)
+            df['ISA_9'] = ichimoku['ISA_9']
+            df['ISB_26'] = ichimoku['ISB_26']
+            df['ITS_9'] = ichimoku['ITS_9']
+            df['IKS_26'] = ichimoku['IKS_26']
+            df['ICS_26'] = ichimoku['ICS_26']
             
             # Fibonacci Retracement levels
             recent_high = df['high'].rolling(window=20).max().iloc[-1]
@@ -162,7 +194,8 @@ class SolanaTradingBot:
             df['fib_0.786'] = recent_low + price_range * 0.786
             
             # ATR for volatility
-            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+            atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+            df['atr'] = atr['ATR_14']
             
             # Price changes
             df['price_change'] = df['close'].pct_change()
@@ -429,43 +462,253 @@ class SolanaTradingBot:
                 await asyncio.sleep(60)
 
     def fetch_ohlcv_data(self, pair):
-        """Fetch OHLCV data from the exchange for a specific pair"""
+        """Fetch OHLCV data with improved error handling and rate limiting"""
         try:
-            # Fetch multiple timeframes for better context
-            ohlcv_1h = self.exchange.fetch_ohlcv(pair, '1h', limit=100)
-            ohlcv_4h = self.exchange.fetch_ohlcv(pair, '4h', limit=50)
-            ohlcv_1d = self.exchange.fetch_ohlcv(pair, '1d', limit=30)
+            # Add exponential backoff for rate limiting
+            max_retries = 3
+            retry_delay = 5
             
-            # Convert to DataFrames
-            df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df_1d = pd.DataFrame(ohlcv_1d, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            # Fetch data for multiple timeframes
+            df_1h = None
+            df_4h = None
+            df_1d = None
             
-            # Convert timestamps
-            for df in [df_1h, df_4h, df_1d]:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df.set_index('timestamp', inplace=True)
+            # Fetch 1h data
+            for attempt in range(max_retries):
+                try:
+                    ohlcv_1h = self.exchange.fetch_ohlcv(
+                        symbol=pair,
+                        timeframe='1h',
+                        limit=100
+                    )
+                    
+                    if not ohlcv_1h:
+                        logger.warning(f"No 1h data returned for {pair}")
+                        break
+                        
+                    # Convert to DataFrame
+                    df_1h = pd.DataFrame(
+                        ohlcv_1h,
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                    )
+                    df_1h['timestamp'] = pd.to_datetime(df_1h['timestamp'], unit='ms')
+                    df_1h.set_index('timestamp', inplace=True)
+                    break
+                    
+                except ccxt.RateLimitExceeded:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Rate limit exceeded for {pair} 1h data, waiting {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} 1h data due to rate limiting")
+                        break
+                        
+                except ccxt.NetworkError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Network error for {pair} 1h data: {str(e)}, retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} 1h data due to network errors")
+                        break
             
+            # Fetch 4h data
+            for attempt in range(max_retries):
+                try:
+                    ohlcv_4h = self.exchange.fetch_ohlcv(
+                        symbol=pair,
+                        timeframe='4h',
+                        limit=50
+                    )
+                    
+                    if not ohlcv_4h:
+                        logger.warning(f"No 4h data returned for {pair}")
+                        break
+                        
+                    # Convert to DataFrame
+                    df_4h = pd.DataFrame(
+                        ohlcv_4h,
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                    )
+                    df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms')
+                    df_4h.set_index('timestamp', inplace=True)
+                    break
+                    
+                except ccxt.RateLimitExceeded:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Rate limit exceeded for {pair} 4h data, waiting {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} 4h data due to rate limiting")
+                        break
+                        
+                except ccxt.NetworkError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Network error for {pair} 4h data: {str(e)}, retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} 4h data due to network errors")
+                        break
+            
+            # Fetch 1d data
+            for attempt in range(max_retries):
+                try:
+                    ohlcv_1d = self.exchange.fetch_ohlcv(
+                        symbol=pair,
+                        timeframe='1d',
+                        limit=30
+                    )
+                    
+                    if not ohlcv_1d:
+                        logger.warning(f"No 1d data returned for {pair}")
+                        break
+                        
+                    # Convert to DataFrame
+                    df_1d = pd.DataFrame(
+                        ohlcv_1d,
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                    )
+                    df_1d['timestamp'] = pd.to_datetime(df_1d['timestamp'], unit='ms')
+                    df_1d.set_index('timestamp', inplace=True)
+                    break
+                    
+                except ccxt.RateLimitExceeded:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Rate limit exceeded for {pair} 1d data, waiting {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} 1d data due to rate limiting")
+                        break
+                        
+                except ccxt.NetworkError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Network error for {pair} 1d data: {str(e)}, retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} 1d data due to network errors")
+                        break
+            
+            # Return all dataframes
             return df_1h, df_4h, df_1d
+                        
         except Exception as e:
-            logger.error(f"Error fetching data for {pair}: {e}")
+            logger.error(f"Error fetching OHLCV data for {pair}: {str(e)}")
             return None, None, None
 
-    async def send_telegram_message(self, message):
-        """Send notification via Telegram with improved error handling"""
-        try:
-            if not self.chat_id:
-                logger.error("No Telegram chat ID configured")
+    async def send_telegram_message(self, message: str, max_retries: int = 3, retry_delay: int = 5):
+        """
+        Send a message to Telegram with retry logic
+        
+        Args:
+            message (str): The message to send
+            max_retries (int): Maximum number of retry attempts
+            retry_delay (int): Delay between retries in seconds
+        """
+        if not self.telegram_bot or not self.chat_id:
+            logger.error("Telegram configuration is missing")
+            return
+            
+        for attempt in range(max_retries):
+            try:
+                await self.telegram_bot.send_message(
+                    chat_id=self.chat_id,
+                    text=message,
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Telegram message sent successfully: {message[:100]}...")
                 return
+            except telegram.error.TimedOut:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Telegram request timed out. Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error("Failed to send Telegram message after maximum retries")
+            except telegram.error.NetworkError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Network error: {e}. Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(f"Network error persists after maximum retries: {e}")
+            except telegram.error.BadRequest as e:
+                logger.error(f"Bad request error (check chat_id and message format): {e}")
+                break  # Don't retry for bad requests
+            except Exception as e:
+                logger.error(f"Unexpected error sending Telegram message: {e}")
+                break  # Don't retry for unexpected errors
                 
-            await self.telegram_bot.send_message(
-                chat_id=self.chat_id, 
-                text=message,
-                parse_mode='HTML'
-            )
-            logger.info(f"Telegram message sent: {message[:50]}...")
-        except Exception as e:
-            logger.error(f"Error sending Telegram message: {e}")
+    def send_trading_signal(self, pair: str, signal_type: str, confidence: float, entry_price: float, 
+                           stop_loss: float, take_profit: float, reasons: List[str]):
+        """
+        Format and send a trading signal message via Telegram
+        
+        Args:
+            pair (str): Trading pair (e.g., 'SOL/USDT')
+            signal_type (str): Type of signal ('buy' or 'sell')
+            confidence (float): Signal confidence score (0-1)
+            entry_price (float): Suggested entry price
+            stop_loss (float): Suggested stop loss price
+            take_profit (float): Suggested take profit price
+            reasons (List[str]): List of reasons for the signal
+        """
+        # Format the confidence score as a percentage
+        confidence_pct = round(confidence * 100, 2)
+        
+        # Calculate potential profit and loss percentages
+        risk_pct = abs(round((stop_loss - entry_price) / entry_price * 100, 2))
+        reward_pct = abs(round((take_profit - entry_price) / entry_price * 100, 2))
+        
+        # Create the message with emojis and formatting
+        message = f"""
+🚨 *New Trading Signal*
+{'🟢 BUY' if signal_type.lower() == 'buy' else '🔴 SELL'} *{pair}*
+
+*Confidence:* {'⭐' * int(confidence_pct/20)}  ({confidence_pct}%)
+*Entry Window:* 30-60 minutes
+
+💰 *Entry Zone:* {entry_price:.4f}
+🛑 *Stop Loss:* {stop_loss:.4f} ({risk_pct}%)
+🎯 *Take Profit:* {take_profit:.4f} ({reward_pct}%)
+
+📊 *Risk/Reward Ratio:* 1:{round(reward_pct/risk_pct, 2)}
+
+*Signal Reasons:*
+"""
+        # Add each reason with a bullet point
+        for reason in reasons:
+            message += f"• {reason}\n"
+            
+        message += "\n⚠️ *Always manage your risk and do your own research*"
+        
+        # Send the message asynchronously
+        asyncio.get_event_loop().run_until_complete(self.send_telegram_message(message))
+        
+    def format_error_message(self, error_type: str, details: str):
+        """
+        Format an error message for Telegram notification
+        
+        Args:
+            error_type (str): Type of error
+            details (str): Error details
+        """
+        message = f"""
+⚠️ *Trading Bot Alert*
+*Type:* {error_type}
+*Details:* {details}
+*Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        # Send the message asynchronously
+        asyncio.get_event_loop().run_until_complete(self.send_telegram_message(message))
 
     def _train_ml_model(self, pair, model_path, scaler_path):
         """Train the machine learning model for a specific pair"""
@@ -551,6 +794,185 @@ class SolanaTradingBot:
         except Exception as e:
             logger.error(f"Error fetching historical data for {pair}: {e}")
             return None
+
+    def _get_trend(self, df):
+        """
+        Determine the trend direction based on multiple indicators
+        
+        Args:
+            df (pd.DataFrame): DataFrame with price data and indicators
+            
+        Returns:
+            str: 'bullish', 'bearish', or 'sideways'
+        """
+        try:
+            # Get the latest data point
+            current = df.iloc[-1]
+            
+            # Check EMA alignment
+            ema_bullish = current['ema_9'] > current['ema_21'] > current['sma_50']
+            ema_bearish = current['ema_9'] < current['ema_21'] < current['sma_50']
+            
+            # Check MACD
+            macd_bullish = current['MACD_12_26_9'] > current['MACDs_12_26_9']
+            macd_bearish = current['MACD_12_26_9'] < current['MACDs_12_26_9']
+            
+            # Check ADX trend strength
+            strong_trend = current['adx'] > 25
+            
+            # Determine trend
+            if ema_bullish and macd_bullish and strong_trend:
+                return "bullish"
+            elif ema_bearish and macd_bearish and strong_trend:
+                return "bearish"
+            else:
+                return "sideways"
+                
+        except Exception as e:
+            logger.error(f"Error determining trend: {e}")
+            return "sideways"
+            
+    def _calculate_trend_strength(self, df_1h, df_4h, df_1d):
+        """
+        Calculate the overall trend strength across timeframes
+        
+        Args:
+            df_1h (pd.DataFrame): 1-hour timeframe data
+            df_4h (pd.DataFrame): 4-hour timeframe data
+            df_1d (pd.DataFrame): 1-day timeframe data
+            
+        Returns:
+            float: Trend strength score between 0 and 1
+        """
+        try:
+            # Get latest data points
+            current_1h = df_1h.iloc[-1]
+            current_4h = df_4h.iloc[-1]
+            current_1d = df_1d.iloc[-1]
+            
+            # Calculate ADX-based strength (0-1)
+            adx_strength_1h = min(current_1h['adx'] / 100, 1)
+            adx_strength_4h = min(current_4h['adx'] / 100, 1)
+            adx_strength_1d = min(current_1d['adx'] / 100, 1)
+            
+            # Calculate price alignment strength (0-1)
+            price_above_ema_1h = current_1h['close'] > current_1h['ema_50']
+            price_above_ema_4h = current_4h['close'] > current_4h['ema_50']
+            price_above_ema_1d = current_1d['close'] > current_1d['ema_50']
+            
+            alignment_score = sum([price_above_ema_1h, price_above_ema_4h, price_above_ema_1d]) / 3
+            
+            # Calculate volume strength (0-1)
+            volume_strength_1h = min(current_1h['volume_ratio'] / 2, 1)
+            volume_strength_4h = min(current_4h['volume_ratio'] / 2, 1)
+            volume_strength_1d = min(current_1d['volume_ratio'] / 2, 1)
+            
+            # Combine scores with weights
+            adx_weight = 0.4
+            alignment_weight = 0.3
+            volume_weight = 0.3
+            
+            trend_strength = (
+                (adx_strength_1h * 0.5 + adx_strength_4h * 0.3 + adx_strength_1d * 0.2) * adx_weight +
+                alignment_score * alignment_weight +
+                (volume_strength_1h * 0.5 + volume_strength_4h * 0.3 + volume_strength_1d * 0.2) * volume_weight
+            )
+            
+            return min(max(trend_strength, 0), 1)  # Ensure result is between 0 and 1
+            
+        except Exception as e:
+            logger.error(f"Error calculating trend strength: {e}")
+            return 0
+
+    def generate_trading_decision(self, signals):
+        """
+        Generate a trading decision based on the analyzed signals
+        
+        Args:
+            signals (dict): Dictionary containing signal analysis results
+            
+        Returns:
+            tuple: (decision, message) where decision is 'BUY', 'SELL', or None
+        """
+        try:
+            if not signals:
+                return None, "No valid signals generated"
+                
+            # Check if we have a strong enough signal
+            if signals['confidence'] < 0.7:
+                return None, f"Signal confidence too low: {signals['confidence']:.2f}"
+                
+            # Determine the trading decision
+            if signals['long']:
+                decision = 'BUY'
+                message = (
+                    f"Strong buy signal detected!\n"
+                    f"Confidence: {signals['confidence']:.2%}\n"
+                    f"Entry Window: {signals['entry_window_hours']} hours\n"
+                    f"Entry Zone: {signals['entry_window_low']:.4f} - {signals['entry_window_high']:.4f}\n"
+                    f"Stop Loss: {signals['stop_loss']:.4f}\n"
+                    f"Take Profit: {signals['take_profit']:.4f}\n"
+                    f"Reasons: {signals['reason']}"
+                )
+            elif signals['short']:
+                decision = 'SELL'
+                message = (
+                    f"Strong sell signal detected!\n"
+                    f"Confidence: {signals['confidence']:.2%}\n"
+                    f"Entry Window: {signals['entry_window_hours']} hours\n"
+                    f"Entry Zone: {signals['entry_window_high']:.4f} - {signals['entry_window_low']:.4f}\n"
+                    f"Stop Loss: {signals['stop_loss']:.4f}\n"
+                    f"Take Profit: {signals['take_profit']:.4f}\n"
+                    f"Reasons: {signals['reason']}"
+                )
+            else:
+                return None, "No clear trading direction"
+                
+            return decision, message
+            
+        except Exception as e:
+            logger.error(f"Error generating trading decision: {e}")
+            return None, f"Error in decision generation: {str(e)}"
+
+    def prepare_ml_features(self, df):
+        """
+        Prepare features for ML model training
+        
+        Args:
+            df (pd.DataFrame): DataFrame with price data and indicators
+            
+        Returns:
+            tuple: (X, y, feature_columns) where X is the feature matrix, y is the target vector,
+                  and feature_columns is the list of feature names
+        """
+        try:
+            # Define features to use
+            feature_columns = [
+                'rsi', 'rsi_slow', 'MACD_12_26_9', 'MACDs_12_26_9', 'MACDh_12_26_9',
+                'BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0', 'BBL_50_2.0', 'BBM_50_2.0', 'BBU_50_2.0',
+                'sma_20', 'sma_50', 'sma_200', 'ema_9', 'ema_21',
+                'volume_ratio', 'adx', 'dmi_plus', 'dmi_minus',
+                'STOCHRSIk_14_14_3_3', 'STOCHRSId_14_14_3_3',
+                'ISA_9', 'ISB_26', 'ITS_9', 'IKS_26', 'ICS_26',
+                'fib_0.236', 'fib_0.382', 'fib_0.5', 'fib_0.618', 'fib_0.786',
+                'atr', 'volatility'
+            ]
+            
+            # Create target variable (1 if price goes up in next period, 0 if down)
+            df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+            
+            # Drop rows with NaN values
+            df = df.dropna()
+            
+            # Prepare feature matrix X and target vector y
+            X = df[feature_columns]
+            y = df['target']
+            
+            return X, y, feature_columns
+            
+        except Exception as e:
+            logger.error(f"Error preparing ML features: {e}")
+            return None, None, None
 
 if __name__ == "__main__":
     try:

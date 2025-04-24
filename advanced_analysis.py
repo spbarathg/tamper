@@ -27,6 +27,96 @@ class AdvancedAnalysis:
         combined_data = self.validate_and_combine_data(binance_data, yf_data)
         return combined_data
 
+    def fetch_binance_data(self, symbol, timeframe='1h', lookback='30d'):
+        """
+        Fetch data from Binance using CCXT
+        """
+        try:
+            import ccxt
+            exchange = ccxt.binance()
+            
+            # Calculate number of candles needed
+            timeframe_minutes = {
+                '1m': 1, '5m': 5, '15m': 15, '30m': 30,
+                '1h': 60, '4h': 240, '1d': 1440
+            }
+            
+            if timeframe not in timeframe_minutes:
+                raise ValueError(f"Unsupported timeframe: {timeframe}")
+                
+            # Convert lookback to number of candles
+            days = int(lookback.replace('d', ''))
+            candles_needed = (days * 24 * 60) // timeframe_minutes[timeframe]
+            
+            # Fetch OHLCV data
+            ohlcv = exchange.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=min(candles_needed, 1000)  # CCXT limit is 1000
+            )
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(
+                ohlcv,
+                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            )
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error fetching Binance data: {str(e)}")
+            return None
+
+    def validate_and_combine_data(self, binance_data, yf_data):
+        """
+        Validate and combine data from multiple sources
+        """
+        if binance_data is None or yf_data is None:
+            return None
+            
+        try:
+            # Ensure both DataFrames have the same columns
+            required_columns = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in binance_data.columns for col in required_columns) or \
+               not all(col in yf_data.columns for col in required_columns):
+                raise ValueError("Missing required columns in data sources")
+            
+            # Align timestamps
+            common_index = binance_data.index.intersection(yf_data.index)
+            if len(common_index) == 0:
+                raise ValueError("No common timestamps between data sources")
+            
+            # Combine data with weighted average
+            combined_data = pd.DataFrame(index=common_index)
+            for col in required_columns:
+                # Use weighted average (giving more weight to Binance data)
+                combined_data[col] = (
+                    binance_data.loc[common_index, col] * 0.7 +
+                    yf_data.loc[common_index, col] * 0.3
+                )
+            
+            # Validate data quality
+            if combined_data.isnull().any().any():
+                # Fill missing values with forward fill then backward fill
+                combined_data = combined_data.fillna(method='ffill').fillna(method='bfill')
+            
+            # Remove outliers (values that deviate more than 3 standard deviations)
+            for col in required_columns:
+                mean = combined_data[col].mean()
+                std = combined_data[col].std()
+                combined_data[col] = combined_data[col].clip(
+                    lower=mean - 3*std,
+                    upper=mean + 3*std
+                )
+            
+            return combined_data
+            
+        except Exception as e:
+            print(f"Error combining data: {str(e)}")
+            return None
+
     def calculate_advanced_indicators(self, df):
         """
         Calculate advanced technical indicators
