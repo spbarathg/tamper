@@ -163,57 +163,33 @@ class SolanaTradingBot:
             
             # Bollinger Bands - handle potential tuple return
             try:
-                bb = ta.bbands(df['close'])
-                if isinstance(bb, tuple):
-                    df['BBL_20_2.0'] = bb[0]
-                    df['BBM_20_2.0'] = bb[1]
-                    df['BBU_20_2.0'] = bb[2]
-                else:
-                    # Check if the keys exist in the DataFrame
-                    if 'BBL_20_2.0' in bb.columns:
-                        df['BBL_20_2.0'] = bb['BBL_20_2.0']
-                        df['BBM_20_2.0'] = bb['BBM_20_2.0']
-                        df['BBU_20_2.0'] = bb['BBU_20_2.0']
-                    else:
-                        # Try alternative column names
-                        df['BBL_20_2.0'] = bb['BBL_20_2']
-                        df['BBM_20_2.0'] = bb['BBM_20_2']
-                        df['BBU_20_2.0'] = bb['BBU_20_2']
-            except Exception as e:
-                logger.warning(f"Error calculating Bollinger Bands: {e}")
-                # Calculate manually as fallback
+                # Calculate manually to avoid pandas_ta issues
                 sma_20 = df['close'].rolling(window=20).mean()
                 std_20 = df['close'].rolling(window=20).std()
                 df['BBL_20_2.0'] = sma_20 - (std_20 * 2)
                 df['BBM_20_2.0'] = sma_20
                 df['BBU_20_2.0'] = sma_20 + (std_20 * 2)
+            except Exception as e:
+                logger.warning(f"Error calculating Bollinger Bands: {e}")
+                # Set default values
+                df['BBL_20_2.0'] = df['close']
+                df['BBM_20_2.0'] = df['close']
+                df['BBU_20_2.0'] = df['close']
             
             # Additional Bollinger Bands with different settings
             try:
-                bb_50 = ta.bbands(df['close'], length=50)
-                if isinstance(bb_50, tuple):
-                    df['BBL_50_2.0'] = bb_50[0]
-                    df['BBM_50_2.0'] = bb_50[1]
-                    df['BBU_50_2.0'] = bb_50[2]
-                else:
-                    # Check if the keys exist in the DataFrame
-                    if 'BBL_50_2.0' in bb_50.columns:
-                        df['BBL_50_2.0'] = bb_50['BBL_50_2.0']
-                        df['BBM_50_2.0'] = bb_50['BBM_50_2.0']
-                        df['BBU_50_2.0'] = bb_50['BBU_50_2.0']
-                    else:
-                        # Try alternative column names
-                        df['BBL_50_2.0'] = bb_50['BBL_50_2']
-                        df['BBM_50_2.0'] = bb_50['BBM_50_2']
-                        df['BBU_50_2.0'] = bb_50['BBU_50_2']
-            except Exception as e:
-                logger.warning(f"Error calculating Bollinger Bands 50: {e}")
-                # Calculate manually as fallback
+                # Calculate manually to avoid pandas_ta issues
                 sma_50 = df['close'].rolling(window=50).mean()
                 std_50 = df['close'].rolling(window=50).std()
                 df['BBL_50_2.0'] = sma_50 - (std_50 * 2)
                 df['BBM_50_2.0'] = sma_50
                 df['BBU_50_2.0'] = sma_50 + (std_50 * 2)
+            except Exception as e:
+                logger.warning(f"Error calculating Bollinger Bands 50: {e}")
+                # Set default values
+                df['BBL_50_2.0'] = df['close']
+                df['BBM_50_2.0'] = df['close']
+                df['BBU_50_2.0'] = df['close']
             
             # Moving Averages
             df['sma_20'] = ta.sma(df['close'], length=20)
@@ -276,28 +252,18 @@ class SolanaTradingBot:
             
             # Ichimoku Cloud - handle potential tuple return
             try:
-                ichimoku = ta.ichimoku(df['high'], df['low'], df['close'])
-                if isinstance(ichimoku, tuple):
-                    df['ISA_9'] = ichimoku[0]
-                    df['ISB_26'] = ichimoku[1]
-                    df['ITS_9'] = ichimoku[2]
-                    df['IKS_26'] = ichimoku[3]
-                    df['ICS_26'] = ichimoku[4]
-                else:
-                    # Check if the keys exist in the DataFrame
-                    if 'ISA_9' in ichimoku.columns:
-                        df['ISA_9'] = ichimoku['ISA_9']
-                        df['ISB_26'] = ichimoku['ISB_26']
-                        df['ITS_9'] = ichimoku['ITS_9']
-                        df['IKS_26'] = ichimoku['IKS_26']
-                        df['ICS_26'] = ichimoku['ICS_26']
-                    else:
-                        # Try alternative column names
-                        df['ISA_9'] = ichimoku['ISA']
-                        df['ISB_26'] = ichimoku['ISB']
-                        df['ITS_9'] = ichimoku['ITS']
-                        df['IKS_26'] = ichimoku['IKS']
-                        df['ICS_26'] = ichimoku['ICS']
+                # Calculate manually to avoid pandas_ta issues
+                high_9 = df['high'].rolling(window=9).max()
+                low_9 = df['low'].rolling(window=9).min()
+                df['ISA_9'] = (high_9 + low_9) / 2
+                
+                high_26 = df['high'].rolling(window=26).max()
+                low_26 = df['low'].rolling(window=26).min()
+                df['ISB_26'] = (high_26 + low_26) / 2
+                
+                df['ITS_9'] = df['ISA_9'].shift(26)
+                df['IKS_26'] = df['ISB_26'].shift(26)
+                df['ICS_26'] = (df['high'] + df['low']) / 2
             except Exception as e:
                 logger.warning(f"Error calculating Ichimoku Cloud: {e}")
                 # Set default values
@@ -335,25 +301,17 @@ class SolanaTradingBot:
             
             # ATR for volatility - handle potential tuple return
             try:
-                atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-                if isinstance(atr, tuple):
-                    df['atr'] = atr[0]
-                else:
-                    # Check if the keys exist in the DataFrame
-                    if 'ATR_14' in atr.columns:
-                        df['atr'] = atr['ATR_14']
-                    else:
-                        # Try alternative column names
-                        df['atr'] = atr['ATR']
-            except Exception as e:
-                logger.warning(f"Error calculating ATR: {e}")
-                # Calculate manually as fallback
+                # Calculate manually to avoid pandas_ta issues
                 high_low = df['high'] - df['low']
                 high_close = (df['high'] - df['close'].shift()).abs()
                 low_close = (df['low'] - df['close'].shift()).abs()
                 ranges = pd.concat([high_low, high_close, low_close], axis=1)
                 true_range = ranges.max(axis=1)
                 df['atr'] = true_range.rolling(window=14).mean()
+            except Exception as e:
+                logger.warning(f"Error calculating ATR: {e}")
+                # Set default values
+                df['atr'] = df['close'].rolling(window=14).std()
             
             # Price changes
             df['price_change'] = df['close'].pct_change()
@@ -426,9 +384,13 @@ class SolanaTradingBot:
             }
             
             # Get the latest data points
-            current_1h = df_1h.iloc[-1]
-            current_4h = df_4h.iloc[-1]
-            current_1d = df_1d.iloc[-1]
+            try:
+                current_1h = df_1h.iloc[-1]
+                current_4h = df_4h.iloc[-1]
+                current_1d = df_1d.iloc[-1]
+            except Exception as e:
+                logger.error(f"Error accessing latest data points: {e}")
+                return None
             
             # 1. Trend Analysis (40% weight)
             trend_score = 0
@@ -436,22 +398,31 @@ class SolanaTradingBot:
             trend_reasons = []
             
             # EMA alignment check
-            if (current_1h['ema_50'] > current_1h['ema_200'] and 
-                current_4h['ema_50'] > current_4h['ema_200'] and 
-                current_1d['ema_50'] > current_1d['ema_200']):
-                trend_score += 1
-                trend_reasons.append("EMA alignment bullish across timeframes")
+            try:
+                if (current_1h['ema_50'] > current_1h['ema_200'] and 
+                    current_4h['ema_50'] > current_4h['ema_200'] and 
+                    current_1d['ema_50'] > current_1d['ema_200']):
+                    trend_score += 1
+                    trend_reasons.append("EMA alignment bullish across timeframes")
+            except Exception as e:
+                logger.warning(f"Error in EMA alignment check: {e}")
             
             # ADX strength check
-            if current_1h['adx'] > 25 and current_4h['adx'] > 25:
-                trend_score += 1
-                trend_reasons.append("Strong trend (ADX > 25)")
+            try:
+                if current_1h['adx'] > 25 and current_4h['adx'] > 25:
+                    trend_score += 1
+                    trend_reasons.append("Strong trend (ADX > 25)")
+            except Exception as e:
+                logger.warning(f"Error in ADX strength check: {e}")
             
             # Price above EMAs
-            if (current_1h['close'] > current_1h['ema_50'] and 
-                current_4h['close'] > current_4h['ema_50']):
-                trend_score += 1
-                trend_reasons.append("Price above EMAs")
+            try:
+                if (current_1h['close'] > current_1h['ema_50'] and 
+                    current_4h['close'] > current_4h['ema_50']):
+                    trend_score += 1
+                    trend_reasons.append("Price above EMAs")
+            except Exception as e:
+                logger.warning(f"Error in price above EMAs check: {e}")
             
             # 2. Momentum Analysis (30% weight)
             momentum_score = 0
@@ -459,16 +430,22 @@ class SolanaTradingBot:
             momentum_reasons = []
             
             # RSI conditions
-            if (30 < current_1h['rsi'] < 70 and 
-                30 < current_4h['rsi'] < 70):
-                momentum_score += 1
-                momentum_reasons.append("RSI in healthy range")
+            try:
+                if (30 < current_1h['rsi'] < 70 and 
+                    30 < current_4h['rsi'] < 70):
+                    momentum_score += 1
+                    momentum_reasons.append("RSI in healthy range")
+            except Exception as e:
+                logger.warning(f"Error in RSI conditions check: {e}")
             
             # MACD conditions
-            if (current_1h['MACD_12_26_9'] > current_1h['MACDs_12_26_9'] and 
-                current_4h['MACD_12_26_9'] > current_4h['MACDs_12_26_9']):
-                momentum_score += 1
-                momentum_reasons.append("MACD bullish crossover")
+            try:
+                if (current_1h['MACD_12_26_9'] > current_1h['MACDs_12_26_9'] and 
+                    current_4h['MACD_12_26_9'] > current_4h['MACDs_12_26_9']):
+                    momentum_score += 1
+                    momentum_reasons.append("MACD bullish crossover")
+            except Exception as e:
+                logger.warning(f"Error in MACD conditions check: {e}")
             
             # 3. Volatility and Volume Analysis (30% weight)
             volatility_score = 0
@@ -476,23 +453,33 @@ class SolanaTradingBot:
             volatility_reasons = []
             
             # Bollinger Bands squeeze
-            bb_width_1h = (current_1h['BBU_20_2.0'] - current_1h['BBL_20_2.0']) / current_1h['BBM_20_2.0']
-            bb_width_4h = (current_4h['BBU_20_2.0'] - current_4h['BBL_20_2.0']) / current_4h['BBM_20_2.0']
-            
-            if bb_width_1h < 0.1 and bb_width_4h < 0.1:
-                volatility_score += 1
-                volatility_reasons.append("Bollinger Band squeeze (potential breakout)")
+            try:
+                bb_width_1h = (current_1h['BBU_20_2.0'] - current_1h['BBL_20_2.0']) / current_1h['BBM_20_2.0']
+                bb_width_4h = (current_4h['BBU_20_2.0'] - current_4h['BBL_20_2.0']) / current_4h['BBM_20_2.0']
+                
+                if bb_width_1h < 0.1 and bb_width_4h < 0.1:
+                    volatility_score += 1
+                    volatility_reasons.append("Bollinger Band squeeze (potential breakout)")
+            except Exception as e:
+                logger.warning(f"Error in Bollinger Bands squeeze check: {e}")
             
             # Volume confirmation
-            if (current_1h['volume_ratio'] > 1.5 and 
-                current_4h['volume_ratio'] > 1.2):
-                volatility_score += 1
-                volatility_reasons.append("Above average volume")
+            try:
+                if (current_1h['volume_ratio'] > 1.5 and 
+                    current_4h['volume_ratio'] > 1.2):
+                    volatility_score += 1
+                    volatility_reasons.append("Above average volume")
+            except Exception as e:
+                logger.warning(f"Error in volume confirmation check: {e}")
             
             # ATR for volatility check
-            if current_1h['atr'] > current_1h['atr'].rolling(20).mean():
-                volatility_score += 1
-                volatility_reasons.append("Increasing volatility")
+            try:
+                # Use a simple comparison instead of rolling
+                if current_1h['atr'] > df_1h['atr'].mean():
+                    volatility_score += 1
+                    volatility_reasons.append("Increasing volatility")
+            except Exception as e:
+                logger.warning(f"Error in ATR volatility check: {e}")
             
             # Calculate final scores
             trend_weight = 0.4
@@ -511,30 +498,43 @@ class SolanaTradingBot:
                 signals['confidence'] = final_score
                 
                 # Calculate stop loss and take profit
-                atr_multiplier = 2.0
-                current_price = current_1h['close']
-                signals['stop_loss'] = current_price - (current_1h['atr'] * atr_multiplier)
-                signals['take_profit'] = current_price + (current_1h['atr'] * atr_multiplier * 2)
-                
-                # Calculate entry window
-                recent_low = df_1h['low'].iloc[-5:].min()
-                recent_high = df_1h['high'].iloc[-5:].max()
-                
-                signals['entry_window_low'] = recent_low
-                signals['entry_window_high'] = current_price
+                try:
+                    atr_multiplier = 2.0
+                    current_price = current_1h['close']
+                    signals['stop_loss'] = current_price - (current_1h['atr'] * atr_multiplier)
+                    signals['take_profit'] = current_price + (current_1h['atr'] * atr_multiplier * 2)
+                    
+                    # Calculate entry window
+                    recent_low = df_1h['low'].iloc[-5:].min()
+                    recent_high = df_1h['high'].iloc[-5:].max()
+                    
+                    signals['entry_window_low'] = recent_low
+                    signals['entry_window_high'] = current_price
+                except Exception as e:
+                    logger.warning(f"Error calculating stop loss and take profit: {e}")
+                    # Set default values
+                    current_price = current_1h['close']
+                    signals['stop_loss'] = current_price * 0.95
+                    signals['take_profit'] = current_price * 1.1
+                    signals['entry_window_low'] = current_price * 0.98
+                    signals['entry_window_high'] = current_price
                 
                 # Combine reasons
                 all_reasons = trend_reasons + momentum_reasons + volatility_reasons
                 signals['reason'] = ", ".join(all_reasons)
                 
                 # Adjust entry window hours based on volatility
-                volatility_factor = current_1h['atr'] / current_1h['close']
-                if volatility_factor > 0.03:
-                    signals['entry_window_hours'] = 0.5
-                elif volatility_factor > 0.02:
+                try:
+                    volatility_factor = current_1h['atr'] / current_1h['close']
+                    if volatility_factor > 0.03:
+                        signals['entry_window_hours'] = 0.5
+                    elif volatility_factor > 0.02:
+                        signals['entry_window_hours'] = 1
+                    else:
+                        signals['entry_window_hours'] = 2
+                except Exception as e:
+                    logger.warning(f"Error adjusting entry window hours: {e}")
                     signals['entry_window_hours'] = 1
-                else:
-                    signals['entry_window_hours'] = 2
             
             return signals
             
