@@ -90,7 +90,7 @@ class SolanaTradingBot:
             self._initialize_ml_model(pair, model_path, scaler_path)
         
         logger.info("Multi-Pair Trading Bot initialized successfully")
-
+        
     def _initialize_ml_model(self, pair, model_path, scaler_path):
         """Initialize or load the machine learning model for a specific pair"""
         try:
@@ -105,7 +105,7 @@ class SolanaTradingBot:
             logger.error(f"Error initializing ML model for {pair}: {e}")
             self.ml_models[pair] = None
             self.scalers[pair] = None
-
+        
     async def send_telegram_message(self, message):
         """Send notification via Telegram with improved error handling"""
         try:
@@ -328,8 +328,8 @@ class SolanaTradingBot:
                 
             if pair not in self.scalers or self.scalers[pair] is None:
                 logger.warning(f"No scaler available for {pair}")
-                return None, 0.0
-            
+            return None, 0.0
+        
             # Prepare features
             X, _, feature_columns = self.prepare_ml_features(df)
             
@@ -440,7 +440,7 @@ class SolanaTradingBot:
             current_1h = df_1h.iloc[-1]
             current_4h = df_4h.iloc[-1]
             current_1d = df_1d.iloc[-1]
-            
+        
             # 1. Trend Analysis (40% weight)
             trend_score = 0
             max_trend_score = 3
@@ -452,7 +452,7 @@ class SolanaTradingBot:
                 current_1d['ema_50'] > current_1d['ema_200']):
                 trend_score += 1
                 trend_reasons.append("EMA alignment bullish across timeframes")
-            
+        
             # ADX strength check
             if current_1h['adx'] > 25 and current_4h['adx'] > 25:
                 trend_score += 1
@@ -561,7 +561,7 @@ class SolanaTradingBot:
         """Generate final trading decision based on all signals"""
         if not signals or signals['confidence'] < 0.7:
             return None, "No clear trading signals"
-        
+            
         # For spot trading (converting between SOL and USDT)
         if signals['long']:
             # Format the entry window time
@@ -584,7 +584,7 @@ class SolanaTradingBot:
             )
             
             return 'BUY', message
-        
+            
         return None, "Insufficient signals for trading decision"
 
     async def run(self):
@@ -621,7 +621,7 @@ class SolanaTradingBot:
                         # Skip pairs we already have a position in
                         if self.active_pairs[pair] is not None:
                             continue
-                        
+                
                         # Fetch and analyze data
                         df_1h, df_4h, df_1d = self.fetch_ohlcv_data(pair)
                         if df_1h is not None and df_4h is not None and df_1d is not None:
@@ -633,7 +633,7 @@ class SolanaTradingBot:
                             if df_1h is None or df_4h is None or df_1d is None:
                                 logger.warning(f"Failed to calculate indicators for {pair}")
                                 continue
-                            
+                    
                             # Analyze signals
                             signals = self.analyze_signals(df_1h, df_4h, df_1d)
                             if signals:
