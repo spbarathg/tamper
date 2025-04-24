@@ -142,39 +142,78 @@ class SolanaTradingBot:
             df['rsi_slow'] = ta.rsi(df['close'], length=21)
             
             # MACD - handle potential tuple return
-            macd = ta.macd(df['close'])
-            if isinstance(macd, tuple):
-                # If macd returns a tuple, extract the components
-                df['MACD_12_26_9'] = macd[0]
-                df['MACDs_12_26_9'] = macd[1]
-                df['MACDh_12_26_9'] = macd[2]
-            else:
-                # If macd returns a DataFrame
-                df['MACD_12_26_9'] = macd['MACD_12_26_9']
-                df['MACDs_12_26_9'] = macd['MACDs_12_26_9']
-                df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
+            try:
+                macd = ta.macd(df['close'])
+                if isinstance(macd, tuple):
+                    # If macd returns a tuple, extract the components
+                    df['MACD_12_26_9'] = macd[0]
+                    df['MACDs_12_26_9'] = macd[1]
+                    df['MACDh_12_26_9'] = macd[2]
+                else:
+                    # If macd returns a DataFrame
+                    df['MACD_12_26_9'] = macd['MACD_12_26_9']
+                    df['MACDs_12_26_9'] = macd['MACDs_12_26_9']
+                    df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
+            except Exception as e:
+                logger.warning(f"Error calculating MACD: {e}")
+                # Set default values
+                df['MACD_12_26_9'] = 0
+                df['MACDs_12_26_9'] = 0
+                df['MACDh_12_26_9'] = 0
             
             # Bollinger Bands - handle potential tuple return
-            bb = ta.bbands(df['close'])
-            if isinstance(bb, tuple):
-                df['BBL_20_2.0'] = bb[0]
-                df['BBM_20_2.0'] = bb[1]
-                df['BBU_20_2.0'] = bb[2]
-            else:
-                df['BBL_20_2.0'] = bb['BBL_20_2.0']
-                df['BBM_20_2.0'] = bb['BBM_20_2.0']
-                df['BBU_20_2.0'] = bb['BBU_20_2.0']
+            try:
+                bb = ta.bbands(df['close'])
+                if isinstance(bb, tuple):
+                    df['BBL_20_2.0'] = bb[0]
+                    df['BBM_20_2.0'] = bb[1]
+                    df['BBU_20_2.0'] = bb[2]
+                else:
+                    # Check if the keys exist in the DataFrame
+                    if 'BBL_20_2.0' in bb.columns:
+                        df['BBL_20_2.0'] = bb['BBL_20_2.0']
+                        df['BBM_20_2.0'] = bb['BBM_20_2.0']
+                        df['BBU_20_2.0'] = bb['BBU_20_2.0']
+                    else:
+                        # Try alternative column names
+                        df['BBL_20_2.0'] = bb['BBL_20_2']
+                        df['BBM_20_2.0'] = bb['BBM_20_2']
+                        df['BBU_20_2.0'] = bb['BBU_20_2']
+            except Exception as e:
+                logger.warning(f"Error calculating Bollinger Bands: {e}")
+                # Calculate manually as fallback
+                sma_20 = df['close'].rolling(window=20).mean()
+                std_20 = df['close'].rolling(window=20).std()
+                df['BBL_20_2.0'] = sma_20 - (std_20 * 2)
+                df['BBM_20_2.0'] = sma_20
+                df['BBU_20_2.0'] = sma_20 + (std_20 * 2)
             
             # Additional Bollinger Bands with different settings
-            bb_50 = ta.bbands(df['close'], length=50)
-            if isinstance(bb_50, tuple):
-                df['BBL_50_2.0'] = bb_50[0]
-                df['BBM_50_2.0'] = bb_50[1]
-                df['BBU_50_2.0'] = bb_50[2]
-            else:
-                df['BBL_50_2.0'] = bb_50['BBL_50_2.0']
-                df['BBM_50_2.0'] = bb_50['BBM_50_2.0']
-                df['BBU_50_2.0'] = bb_50['BBU_50_2.0']
+            try:
+                bb_50 = ta.bbands(df['close'], length=50)
+                if isinstance(bb_50, tuple):
+                    df['BBL_50_2.0'] = bb_50[0]
+                    df['BBM_50_2.0'] = bb_50[1]
+                    df['BBU_50_2.0'] = bb_50[2]
+                else:
+                    # Check if the keys exist in the DataFrame
+                    if 'BBL_50_2.0' in bb_50.columns:
+                        df['BBL_50_2.0'] = bb_50['BBL_50_2.0']
+                        df['BBM_50_2.0'] = bb_50['BBM_50_2.0']
+                        df['BBU_50_2.0'] = bb_50['BBU_50_2.0']
+                    else:
+                        # Try alternative column names
+                        df['BBL_50_2.0'] = bb_50['BBL_50_2']
+                        df['BBM_50_2.0'] = bb_50['BBM_50_2']
+                        df['BBU_50_2.0'] = bb_50['BBU_50_2']
+            except Exception as e:
+                logger.warning(f"Error calculating Bollinger Bands 50: {e}")
+                # Calculate manually as fallback
+                sma_50 = df['close'].rolling(window=50).mean()
+                std_50 = df['close'].rolling(window=50).std()
+                df['BBL_50_2.0'] = sma_50 - (std_50 * 2)
+                df['BBM_50_2.0'] = sma_50
+                df['BBU_50_2.0'] = sma_50 + (std_50 * 2)
             
             # Moving Averages
             df['sma_20'] = ta.sma(df['close'], length=20)
@@ -190,39 +229,83 @@ class SolanaTradingBot:
             df['volume_ratio'] = df['volume'] / df['volume_sma']
             
             # Trend indicators with fixed ADX calculation
-            adx_indicator = ta.adx(df['high'], df['low'], df['close'], length=14)
-            if isinstance(adx_indicator, tuple):
-                df['adx'] = adx_indicator[0]
-                df['dmi_plus'] = adx_indicator[1]
-                df['dmi_minus'] = adx_indicator[2]
-            else:
-                df['adx'] = adx_indicator['ADX_14']
-                df['dmi_plus'] = adx_indicator['DMP_14']
-                df['dmi_minus'] = adx_indicator['DMN_14']
+            try:
+                adx_indicator = ta.adx(df['high'], df['low'], df['close'], length=14)
+                if isinstance(adx_indicator, tuple):
+                    df['adx'] = adx_indicator[0]
+                    df['dmi_plus'] = adx_indicator[1]
+                    df['dmi_minus'] = adx_indicator[2]
+                else:
+                    # Check if the keys exist in the DataFrame
+                    if 'ADX_14' in adx_indicator.columns:
+                        df['adx'] = adx_indicator['ADX_14']
+                        df['dmi_plus'] = adx_indicator['DMP_14']
+                        df['dmi_minus'] = adx_indicator['DMN_14']
+                    else:
+                        # Try alternative column names
+                        df['adx'] = adx_indicator['ADX']
+                        df['dmi_plus'] = adx_indicator['DMP']
+                        df['dmi_minus'] = adx_indicator['DMN']
+            except Exception as e:
+                logger.warning(f"Error calculating ADX: {e}")
+                # Set default values
+                df['adx'] = 0
+                df['dmi_plus'] = 0
+                df['dmi_minus'] = 0
             
             # Stochastic RSI - handle potential tuple return
-            stoch_rsi = ta.stochrsi(df['close'])
-            if isinstance(stoch_rsi, tuple):
-                df['STOCHRSIk_14_14_3_3'] = stoch_rsi[0]
-                df['STOCHRSId_14_14_3_3'] = stoch_rsi[1]
-            else:
-                df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk_14_14_3_3']
-                df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId_14_14_3_3']
+            try:
+                stoch_rsi = ta.stochrsi(df['close'])
+                if isinstance(stoch_rsi, tuple):
+                    df['STOCHRSIk_14_14_3_3'] = stoch_rsi[0]
+                    df['STOCHRSId_14_14_3_3'] = stoch_rsi[1]
+                else:
+                    # Check if the keys exist in the DataFrame
+                    if 'STOCHRSIk_14_14_3_3' in stoch_rsi.columns:
+                        df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk_14_14_3_3']
+                        df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId_14_14_3_3']
+                    else:
+                        # Try alternative column names
+                        df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk']
+                        df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId']
+            except Exception as e:
+                logger.warning(f"Error calculating Stochastic RSI: {e}")
+                # Set default values
+                df['STOCHRSIk_14_14_3_3'] = 50
+                df['STOCHRSId_14_14_3_3'] = 50
             
             # Ichimoku Cloud - handle potential tuple return
-            ichimoku = ta.ichimoku(df['high'], df['low'], df['close'])
-            if isinstance(ichimoku, tuple):
-                df['ISA_9'] = ichimoku[0]
-                df['ISB_26'] = ichimoku[1]
-                df['ITS_9'] = ichimoku[2]
-                df['IKS_26'] = ichimoku[3]
-                df['ICS_26'] = ichimoku[4]
-            else:
-                df['ISA_9'] = ichimoku['ISA_9']
-                df['ISB_26'] = ichimoku['ISB_26']
-                df['ITS_9'] = ichimoku['ITS_9']
-                df['IKS_26'] = ichimoku['IKS_26']
-                df['ICS_26'] = ichimoku['ICS_26']
+            try:
+                ichimoku = ta.ichimoku(df['high'], df['low'], df['close'])
+                if isinstance(ichimoku, tuple):
+                    df['ISA_9'] = ichimoku[0]
+                    df['ISB_26'] = ichimoku[1]
+                    df['ITS_9'] = ichimoku[2]
+                    df['IKS_26'] = ichimoku[3]
+                    df['ICS_26'] = ichimoku[4]
+                else:
+                    # Check if the keys exist in the DataFrame
+                    if 'ISA_9' in ichimoku.columns:
+                        df['ISA_9'] = ichimoku['ISA_9']
+                        df['ISB_26'] = ichimoku['ISB_26']
+                        df['ITS_9'] = ichimoku['ITS_9']
+                        df['IKS_26'] = ichimoku['IKS_26']
+                        df['ICS_26'] = ichimoku['ICS_26']
+                    else:
+                        # Try alternative column names
+                        df['ISA_9'] = ichimoku['ISA']
+                        df['ISB_26'] = ichimoku['ISB']
+                        df['ITS_9'] = ichimoku['ITS']
+                        df['IKS_26'] = ichimoku['IKS']
+                        df['ICS_26'] = ichimoku['ICS']
+            except Exception as e:
+                logger.warning(f"Error calculating Ichimoku Cloud: {e}")
+                # Set default values
+                df['ISA_9'] = df['close']
+                df['ISB_26'] = df['close']
+                df['ITS_9'] = df['close']
+                df['IKS_26'] = df['close']
+                df['ICS_26'] = df['close']
             
             # Fibonacci Retracement levels - handle potential None values
             try:
@@ -251,11 +334,26 @@ class SolanaTradingBot:
                 df['fib_0.786'] = df['close'].mean() * 1.05
             
             # ATR for volatility - handle potential tuple return
-            atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-            if isinstance(atr, tuple):
-                df['atr'] = atr[0]
-            else:
-                df['atr'] = atr['ATR_14']
+            try:
+                atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+                if isinstance(atr, tuple):
+                    df['atr'] = atr[0]
+                else:
+                    # Check if the keys exist in the DataFrame
+                    if 'ATR_14' in atr.columns:
+                        df['atr'] = atr['ATR_14']
+                    else:
+                        # Try alternative column names
+                        df['atr'] = atr['ATR']
+            except Exception as e:
+                logger.warning(f"Error calculating ATR: {e}")
+                # Calculate manually as fallback
+                high_low = df['high'] - df['low']
+                high_close = (df['high'] - df['close'].shift()).abs()
+                low_close = (df['low'] - df['close'].shift()).abs()
+                ranges = pd.concat([high_low, high_close, low_close], axis=1)
+                true_range = ranges.max(axis=1)
+                df['atr'] = true_range.rolling(window=14).mean()
             
             # Price changes
             df['price_change'] = df['close'].pct_change()
