@@ -148,17 +148,16 @@ class SolanaTradingBot:
                     logger.warning("NaN values found in close prices, filling with forward fill")
                     df['close'] = df['close'].fillna(method='ffill')
                 
-                macd = ta.macd(df['close'])
-                if isinstance(macd, tuple):
-                    # If macd returns a tuple, extract the components
-                    df['MACD_12_26_9'] = macd[0]
-                    df['MACDs_12_26_9'] = macd[1]
-                    df['MACDh_12_26_9'] = macd[2]
-                else:
-                    # If macd returns a DataFrame
-                    df['MACD_12_26_9'] = macd['MACD_12_26_9']
-                    df['MACDs_12_26_9'] = macd['MACDs_12_26_9']
-                    df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
+                # Calculate MACD manually to avoid pandas_ta issues
+                exp1 = df['close'].ewm(span=12, adjust=False).mean()
+                exp2 = df['close'].ewm(span=26, adjust=False).mean()
+                macd_line = exp1 - exp2
+                signal_line = macd_line.ewm(span=9, adjust=False).mean()
+                histogram = macd_line - signal_line
+                
+                df['MACD_12_26_9'] = macd_line
+                df['MACDs_12_26_9'] = signal_line
+                df['MACDh_12_26_9'] = histogram
                 
                 # Fill any NaN values in MACD columns
                 df['MACD_12_26_9'] = df['MACD_12_26_9'].fillna(0)
