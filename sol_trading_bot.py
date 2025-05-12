@@ -13,7 +13,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 import joblib
 import pickle
-from typing import List
+from typing import List, Dict, Any
+import signal
+import sys
+from utils.telegram_handler import TelegramCommandHandler
 
 # Configure logging
 logging.basicConfig(
@@ -99,7 +102,8 @@ class SolanaTradingBot:
         # ML model parameters
         self.ml_models = {}
         self.scalers = {}    # Dictionary to store scalers for each pair
-        self.ml_prediction_threshold = 0.65  # Confidence threshold for ML predictions
+        self.ml_prediction_threshold = float(os.getenv('ML_PREDICTION_THRESHOLD', 0.5))
+        self.signal_confidence_threshold = float(os.getenv('SIGNAL_CONFIDENCE_THRESHOLD', 0.5))
         self.ml_weight = 2.5  # Weight for ML predictions in final decision
         
         # Initialize models for each pair
@@ -111,6 +115,24 @@ class SolanaTradingBot:
             self._initialize_ml_model(pair, model_path, scaler_path)
         
         logger.info("Multi-Pair Trading Bot initialized successfully")
+        
+        self._is_running = False
+
+        # Trading interval (in seconds) - default 5 minutes, can override with env var
+        self.trading_interval_seconds = int(os.getenv('TRADING_INTERVAL_SECONDS', 300))
+        # Retrain interval (in seconds) - default 6 hours
+        self.retrain_interval_seconds = int(os.getenv('RETRAIN_INTERVAL_SECONDS', 21600))
+        self.last_retrain_time = time.time()
+
+        # Initialize Telegram command handler
+        self.telegram_handler = TelegramCommandHandler(
+            bot_token=os.getenv('TELEGRAM_BOT_TOKEN'),
+            chat_id=os.getenv('TELEGRAM_CHAT_ID'),
+            trading_bot=self
+        )
+        
+        # Start the command handler
+        self.telegram_handler.start()
 
     def _initialize_ml_model(self, pair, model_path, scaler_path):
         """Initialize or load the machine learning model for a specific pair"""
@@ -130,252 +152,51 @@ class SolanaTradingBot:
     def calculate_indicators(self, df):
         """Calculate technical indicators with improved error handling"""
         try:
-            if df is None or df.empty:
-                logger.error("Empty or None DataFrame provided to calculate_indicators")
+            if df is None or len(df) < 200:  # Need at least 200 candles for all indicators
+                logger.warning("Not enough data for indicator calculation")
                 return None
                 
-            # Make a copy to avoid modifying the original
-            df = df.copy()
-            
-            # RSI with multiple timeframes
-            df['rsi'] = ta.rsi(df['close'], length=14)
-            df['rsi_slow'] = ta.rsi(df['close'], length=21)
-            
-            # MACD - handle potential tuple return and None values
-            try:
-                # Check if close prices contain None values
-                if df['close'].isna().any():
-                    logger.warning("NaN values found in close prices, filling with forward fill")
-                    df['close'] = df['close'].fillna(method='ffill')
-                
-                # Calculate MACD manually to avoid pandas_ta issues
-                exp1 = df['close'].ewm(span=12, adjust=False).mean()
-                exp2 = df['close'].ewm(span=26, adjust=False).mean()
-                macd_line = exp1 - exp2
-                signal_line = macd_line.ewm(span=9, adjust=False).mean()
-                histogram = macd_line - signal_line
-                
-                df['MACD_12_26_9'] = macd_line
-                df['MACDs_12_26_9'] = signal_line
-                df['MACDh_12_26_9'] = histogram
-                
-                # Fill any NaN values in MACD columns
-                df['MACD_12_26_9'] = df['MACD_12_26_9'].fillna(0)
-                df['MACDs_12_26_9'] = df['MACDs_12_26_9'].fillna(0)
-                df['MACDh_12_26_9'] = df['MACDh_12_26_9'].fillna(0)
-            except Exception as e:
-                logger.warning(f"Error calculating MACD: {e}")
-                # Set default values
-                df['MACD_12_26_9'] = 0
-                df['MACDs_12_26_9'] = 0
-                df['MACDh_12_26_9'] = 0
-            
-            # Bollinger Bands - handle potential tuple return
-            try:
-                # Calculate manually to avoid pandas_ta issues
-                sma_20 = df['close'].rolling(window=20).mean()
-                std_20 = df['close'].rolling(window=20).std()
-                df['BBL_20_2.0'] = sma_20 - (std_20 * 2)
-                df['BBM_20_2.0'] = sma_20
-                df['BBU_20_2.0'] = sma_20 + (std_20 * 2)
-                
-                # Fill NaN values
-                df['BBL_20_2.0'] = df['BBL_20_2.0'].fillna(df['close'])
-                df['BBM_20_2.0'] = df['BBM_20_2.0'].fillna(df['close'])
-                df['BBU_20_2.0'] = df['BBU_20_2.0'].fillna(df['close'])
-            except Exception as e:
-                logger.warning(f"Error calculating Bollinger Bands: {e}")
-                # Set default values
-                df['BBL_20_2.0'] = df['close']
-                df['BBM_20_2.0'] = df['close']
-                df['BBU_20_2.0'] = df['close']
-            
-            # Additional Bollinger Bands with different settings
-            try:
-                # Calculate manually to avoid pandas_ta issues
-                sma_50 = df['close'].rolling(window=50).mean()
-                std_50 = df['close'].rolling(window=50).std()
-                df['BBL_50_2.0'] = sma_50 - (std_50 * 2)
-                df['BBM_50_2.0'] = sma_50
-                df['BBU_50_2.0'] = sma_50 + (std_50 * 2)
-                
-                # Fill NaN values
-                df['BBL_50_2.0'] = df['BBL_50_2.0'].fillna(df['close'])
-                df['BBM_50_2.0'] = df['BBM_50_2.0'].fillna(df['close'])
-                df['BBU_50_2.0'] = df['BBU_50_2.0'].fillna(df['close'])
-            except Exception as e:
-                logger.warning(f"Error calculating Bollinger Bands 50: {e}")
-                # Set default values
-                df['BBL_50_2.0'] = df['close']
-                df['BBM_50_2.0'] = df['close']
-                df['BBU_50_2.0'] = df['close']
-            
-            # Moving Averages
-            df['sma_20'] = ta.sma(df['close'], length=20)
-            df['sma_50'] = ta.sma(df['close'], length=50)
-            df['sma_200'] = ta.sma(df['close'], length=200)
+            # Calculate EMAs
             df['ema_9'] = ta.ema(df['close'], length=9)
             df['ema_21'] = ta.ema(df['close'], length=21)
             df['ema_50'] = ta.ema(df['close'], length=50)
             df['ema_200'] = ta.ema(df['close'], length=200)
             
-            # Fill NaN values in moving averages
-            for col in ['sma_20', 'sma_50', 'sma_200', 'ema_9', 'ema_21', 'ema_50', 'ema_200']:
-                df[col] = df[col].fillna(df['close'])
-            
-            # Volume indicators
-            df['volume_sma'] = ta.sma(df['volume'], length=20)
-            df['volume_ratio'] = df['volume'] / df['volume_sma']
-            df['volume_ratio'] = df['volume_ratio'].fillna(1.0)  # Default to 1.0 if NaN
-            
-            # Trend indicators with fixed ADX calculation
+            # Calculate MACD with error handling
             try:
-                adx_indicator = ta.adx(df['high'], df['low'], df['close'], length=14)
-                if isinstance(adx_indicator, tuple):
-                    df['adx'] = adx_indicator[0]
-                    df['dmi_plus'] = adx_indicator[1]
-                    df['dmi_minus'] = adx_indicator[2]
+                macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+                if macd is not None:
+                    df['macd'] = macd['MACD_12_26_9']
+                    df['macd_signal'] = macd['MACDs_12_26_9']
+                    df['macd_hist'] = macd['MACDh_12_26_9']
                 else:
-                    # Check if the keys exist in the DataFrame
-                    if 'ADX_14' in adx_indicator.columns:
-                        df['adx'] = adx_indicator['ADX_14']
-                        df['dmi_plus'] = adx_indicator['DMP_14']
-                        df['dmi_minus'] = adx_indicator['DMN_14']
-                    else:
-                        # Try alternative column names
-                        df['adx'] = adx_indicator['ADX']
-                        df['dmi_plus'] = adx_indicator['DMP']
-                        df['dmi_minus'] = adx_indicator['DMN']
-                
-                # Fill NaN values
-                df['adx'] = df['adx'].fillna(0)
-                df['dmi_plus'] = df['dmi_plus'].fillna(0)
-                df['dmi_minus'] = df['dmi_minus'].fillna(0)
+                    logger.warning("MACD calculation returned None")
+                    df['macd'] = None
+                    df['macd_signal'] = None
+                    df['macd_hist'] = None
             except Exception as e:
-                logger.warning(f"Error calculating ADX: {e}")
-                # Set default values
-                df['adx'] = 0
-                df['dmi_plus'] = 0
-                df['dmi_minus'] = 0
+                logger.warning(f"Error calculating MACD: {e}")
+                df['macd'] = None
+                df['macd_signal'] = None
+                df['macd_hist'] = None
             
-            # Stochastic RSI - handle potential tuple return
-            try:
-                stoch_rsi = ta.stochrsi(df['close'])
-                if isinstance(stoch_rsi, tuple):
-                    df['STOCHRSIk_14_14_3_3'] = stoch_rsi[0]
-                    df['STOCHRSId_14_14_3_3'] = stoch_rsi[1]
-                else:
-                    # Check if the keys exist in the DataFrame
-                    if 'STOCHRSIk_14_14_3_3' in stoch_rsi.columns:
-                        df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk_14_14_3_3']
-                        df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId_14_14_3_3']
-                    else:
-                        # Try alternative column names
-                        df['STOCHRSIk_14_14_3_3'] = stoch_rsi['STOCHRSIk']
-                        df['STOCHRSId_14_14_3_3'] = stoch_rsi['STOCHRSId']
-                
-                # Fill NaN values
-                df['STOCHRSIk_14_14_3_3'] = df['STOCHRSIk_14_14_3_3'].fillna(50)
-                df['STOCHRSId_14_14_3_3'] = df['STOCHRSId_14_14_3_3'].fillna(50)
-            except Exception as e:
-                logger.warning(f"Error calculating Stochastic RSI: {e}")
-                # Set default values
-                df['STOCHRSIk_14_14_3_3'] = 50
-                df['STOCHRSId_14_14_3_3'] = 50
+            # Calculate RSI
+            df['rsi'] = ta.rsi(df['close'], length=14)
             
-            # Ichimoku Cloud - handle potential tuple return
-            try:
-                # Calculate manually to avoid pandas_ta issues
-                high_9 = df['high'].rolling(window=9).max()
-                low_9 = df['low'].rolling(window=9).min()
-                df['ISA_9'] = (high_9 + low_9) / 2
-                
-                high_26 = df['high'].rolling(window=26).max()
-                low_26 = df['low'].rolling(window=26).min()
-                df['ISB_26'] = (high_26 + low_26) / 2
-                
-                df['ITS_9'] = df['ISA_9'].shift(26)
-                df['IKS_26'] = df['ISB_26'].shift(26)
-                df['ICS_26'] = (df['high'] + df['low']) / 2
-                
-                # Fill NaN values
-                for col in ['ISA_9', 'ISB_26', 'ITS_9', 'IKS_26', 'ICS_26']:
-                    df[col] = df[col].fillna(df['close'])
-            except Exception as e:
-                logger.warning(f"Error calculating Ichimoku Cloud: {e}")
-                # Set default values
-                df['ISA_9'] = df['close']
-                df['ISB_26'] = df['close']
-                df['ITS_9'] = df['close']
-                df['IKS_26'] = df['close']
-                df['ICS_26'] = df['close']
+            # Calculate Bollinger Bands
+            bb = ta.bbands(df['close'], length=20, std=2)
+            df['bb_upper'] = bb['BBU_20_2.0']
+            df['bb_middle'] = bb['BBM_20_2.0']
+            df['bb_lower'] = bb['BBL_20_2.0']
             
-            # Fibonacci Retracement levels - handle potential None values
-            try:
-                recent_high = df['high'].rolling(window=20).max().iloc[-1]
-                recent_low = df['low'].rolling(window=20).min().iloc[-1]
-                
-                if pd.isna(recent_high) or pd.isna(recent_low):
-                    logger.warning("NaN values in high/low for Fibonacci calculation")
-                    recent_high = df['high'].max()
-                    recent_low = df['low'].min()
-                
-                price_range = recent_high - recent_low
-                
-                df['fib_0.236'] = recent_low + price_range * 0.236
-                df['fib_0.382'] = recent_low + price_range * 0.382
-                df['fib_0.5'] = recent_low + price_range * 0.5
-                df['fib_0.618'] = recent_low + price_range * 0.618
-                df['fib_0.786'] = recent_low + price_range * 0.786
-                
-                # Fill NaN values
-                for col in ['fib_0.236', 'fib_0.382', 'fib_0.5', 'fib_0.618', 'fib_0.786']:
-                    df[col] = df[col].fillna(df['close'])
-            except Exception as e:
-                logger.error(f"Error calculating Fibonacci levels: {e}")
-                # Set default values to avoid None errors
-                df['fib_0.236'] = df['close'].mean() * 0.95
-                df['fib_0.382'] = df['close'].mean() * 0.97
-                df['fib_0.5'] = df['close'].mean()
-                df['fib_0.618'] = df['close'].mean() * 1.03
-                df['fib_0.786'] = df['close'].mean() * 1.05
+            # Calculate ATR
+            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
             
-            # ATR for volatility - handle potential tuple return
-            try:
-                # Calculate manually to avoid pandas_ta issues
-                high_low = df['high'] - df['low']
-                high_close = (df['high'] - df['close'].shift()).abs()
-                low_close = (df['low'] - df['close'].shift()).abs()
-                ranges = pd.concat([high_low, high_close, low_close], axis=1)
-                true_range = ranges.max(axis=1)
-                df['atr'] = true_range.rolling(window=14).mean()
-                
-                # Fill NaN values
-                df['atr'] = df['atr'].fillna(df['close'].rolling(window=14).std())
-            except Exception as e:
-                logger.warning(f"Error calculating ATR: {e}")
-                # Set default values
-                df['atr'] = df['close'].rolling(window=14).std()
-                df['atr'] = df['atr'].fillna(df['close'].std())
-            
-            # Price changes
-            df['price_change'] = df['close'].pct_change()
-            df['price_change_1h'] = df['close'].pct_change(periods=1)
-            df['price_change_4h'] = df['close'].pct_change(periods=4)
-            df['price_change_1d'] = df['close'].pct_change(periods=24)
-            
-            # Fill NaN values in price changes
-            for col in ['price_change', 'price_change_1h', 'price_change_4h', 'price_change_1d']:
-                df[col] = df[col].fillna(0)
-            
-            # Volatility
-            df['volatility'] = df['close'].rolling(window=20).std() / df['close'].rolling(window=20).mean()
-            df['volatility'] = df['volatility'].fillna(0)
-            
-            # Fill NaN values with 0 to avoid None errors
-            df = df.fillna(0)
+            # Calculate Stochastic RSI
+            df['stoch_rsi'] = ta.stochrsi(df['close'], length=14)
             
             return df
+            
         except Exception as e:
             logger.error(f"Error calculating indicators: {e}")
             return None
@@ -490,8 +311,8 @@ class SolanaTradingBot:
             
             # MACD conditions
             try:
-                if (current_1h['MACD_12_26_9'] > current_1h['MACDs_12_26_9'] and 
-                    current_4h['MACD_12_26_9'] > current_4h['MACDs_12_26_9']):
+                if (current_1h['macd'] > current_1h['macd_signal'] and 
+                    current_4h['macd'] > current_4h['macd_signal']):
                     momentum_score += 1
                     momentum_reasons.append("MACD bullish crossover")
             except Exception as e:
@@ -504,8 +325,8 @@ class SolanaTradingBot:
             
             # Bollinger Bands squeeze
             try:
-                bb_width_1h = (current_1h['BBU_20_2.0'] - current_1h['BBL_20_2.0']) / current_1h['BBM_20_2.0']
-                bb_width_4h = (current_4h['BBU_20_2.0'] - current_4h['BBL_20_2.0']) / current_4h['BBM_20_2.0']
+                bb_width_1h = (current_1h['bb_upper'] - current_1h['bb_lower']) / current_1h['bb_middle']
+                bb_width_4h = (current_4h['bb_upper'] - current_4h['bb_lower']) / current_4h['bb_middle']
                 
                 if bb_width_1h < 0.1 and bb_width_4h < 0.1:
                     volatility_score += 1
@@ -555,8 +376,8 @@ class SolanaTradingBot:
                     signals['take_profit'] = current_price + (current_1h['atr'] * atr_multiplier * 2)
                     
                     # Calculate entry window
-                    recent_low = df_1h['low'].iloc[-5:].min()
-                    recent_high = df_1h['high'].iloc[-5:].max()
+                    recent_low = df_1h['bb_lower'].iloc[-5:].min()
+                    recent_high = df_1h['bb_upper'].iloc[-5:].max()
                     
                     signals['entry_window_low'] = recent_low
                     signals['entry_window_high'] = current_price
@@ -592,85 +413,69 @@ class SolanaTradingBot:
             logger.error(f"Error analyzing signals: {e}")
             return None
 
-    async def run(self):
-        """Main bot loop with improved error handling and health checks"""
-        logger.info("Starting Multi-Pair Trading Bot")
+    async def cleanup(self):
+        """Cleanup resources before shutdown"""
         try:
-            await self.send_telegram_message("🚀 Multi-Pair Trading Bot started!")
-        except Exception as e:
-            logger.error(f"Error sending startup message: {e}")
+            # Stop the Telegram command handler
+            self.telegram_handler.stop()
             
-        last_training_time = datetime.now()
-        
-        while True:
-            try:
-                # Health check
-                if not self.exchange or not self.telegram_bot:
-                    logger.error("Critical services unavailable")
-                    await asyncio.sleep(60)
-                    continue
+            # Close exchange connection
+            if hasattr(self, 'exchange'):
+                await self.exchange.close()
                 
-                # Check if it's time to retrain the model
-                current_time = datetime.now()
-                if (current_time - last_training_time).days >= 7:
-                    logger.info("Scheduling model retraining for all pairs")
-                    for pair in self.trading_pairs:
-                        model_path = f"{pair.replace('/', '_')}_ml_model.pkl"
-                        scaler_path = f"{pair.replace('/', '_')}_scaler.pkl"
-                        self._train_ml_model(pair, model_path, scaler_path)
-                    last_training_time = current_time
+            logger.info("Cleanup completed successfully")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    async def run(self):
+        """Main bot execution loop."""
+        try:
+            logger.info("Starting Solana trading bot...")
+            self._is_running = True
+            
+            # Initialize exchange connection
+            if not await self.initialize_exchange():
+                logger.error("Failed to initialize exchange connection. Exiting...")
+                return
                 
-                # Analyze each trading pair
-                for pair in self.trading_pairs:
-                    try:
-                        # Skip pairs we already have a position in
-                        if self.active_pairs[pair] is not None:
-                            continue
-                        
-                        # Fetch and analyze data
-                        df_1h, df_4h, df_1d = self.fetch_ohlcv_data(pair)
-                        if df_1h is not None and df_4h is not None and df_1d is not None:
-                            # Calculate indicators for all timeframes
-                            df_1h = self.calculate_indicators(df_1h)
-                            df_4h = self.calculate_indicators(df_4h)
-                            df_1d = self.calculate_indicators(df_1d)
-                            
-                            if df_1h is None or df_4h is None or df_1d is None:
-                                logger.warning(f"Failed to calculate indicators for {pair}")
-                                continue
-                            
-                            # Analyze signals
-                            signals = self.analyze_signals(df_1h, df_4h, df_1d)
-                            if signals:
-                                decision, message = self.generate_trading_decision(signals)
-                                
-                                if decision:
-                                    # Update position
-                                    self.active_pairs[pair] = 'long' if decision == 'BUY' else 'short'
-                                    
-                                    # Send notification with detailed analysis
-                                    await self.send_telegram_message(
-                                        f"🚨 {pair} Conversion Alert 🚨\n{message}\n"
-                                        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                                    )
-                                    
-                                    # Log the signal
-                                    logger.info(f"Trading signal for {pair}: {decision} with confidence {signals['confidence']:.2f}")
-                    
-                    except Exception as e:
-                        logger.error(f"Error processing pair {pair}: {e}")
-                        continue
-                
-                # Wait for 5 minutes before next analysis
-                await asyncio.sleep(300)
-                
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}")
+            while self._is_running:
                 try:
-                    await self.send_telegram_message(f"⚠️ Bot Error: {str(e)}")
-                except:
-                    pass
-                await asyncio.sleep(60)
+                    # Retrain ML models periodically
+                    now = time.time()
+                    if now - self.last_retrain_time > self.retrain_interval_seconds:
+                        logger.info("Retraining ML models with latest data...")
+                        for pair in self.trading_pairs:
+                            model_path = f"{pair.replace('/', '_')}_ml_model.pkl"
+                            scaler_path = f"{pair.replace('/', '_')}_scaler.pkl"
+                            self._train_ml_model(pair, model_path, scaler_path)
+                        self.last_retrain_time = now
+                    # Ensure exchange connection is active
+                    if not await self.ensure_exchange_connection():
+                        logger.error("Lost exchange connection. Attempting to reconnect...")
+                        await asyncio.sleep(5)
+                        continue
+                        
+                    # Fetch market data
+                    market_data = await self.fetch_market_data()
+                    if not market_data:
+                        logger.warning("Failed to fetch market data. Retrying...")
+                        await asyncio.sleep(5)
+                        continue
+                        
+                    # Process market data and execute trades
+                    await self.process_market_data(market_data)
+                    
+                    # Sleep for the configured interval
+                    await asyncio.sleep(self.trading_interval_seconds)
+                    
+                except Exception as e:
+                    logger.error(f"Error in main loop: {e}")
+                    await asyncio.sleep(5)  # Sleep before retrying
+                    
+        except Exception as e:
+            logger.error(f"Critical error in bot execution: {e}")
+        finally:
+            await self.cleanup()
 
     def fetch_ohlcv_data(self, pair):
         """Fetch OHLCV data with improved error handling and rate limiting"""
@@ -832,6 +637,13 @@ class SolanaTradingBot:
             
         for attempt in range(max_retries):
             try:
+                # Create a new event loop for this operation if needed
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
                 await self.telegram_bot.send_message(
                     chat_id=self.chat_id,
                     text=message,
@@ -872,15 +684,18 @@ class SolanaTradingBot:
             take_profit (float): Suggested take profit price
             reasons (List[str]): List of reasons for the signal
         """
-        # Format the confidence score as a percentage
         confidence_pct = round(confidence * 100, 2)
-        
-        # Calculate potential profit and loss percentages
         risk_pct = abs(round((stop_loss - entry_price) / entry_price * 100, 2))
         reward_pct = abs(round((take_profit - entry_price) / entry_price * 100, 2))
-        
-        # Create the message with emojis and formatting
-        message = f"""
+        # Use the latest event time for the signal
+        event_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if signal_type == 'WATCHLIST':
+            message = f"\n👀 *Watchlist Signal*\n*{pair}*\n\n*Confidence:* {confidence_pct}% (Low)\n*Entry Window:* 30-60 minutes\n\n💰 *Entry Zone:* {entry_price:.4f}\n🛑 *Stop Loss:* {stop_loss:.4f} ({risk_pct}%)\n🎯 *Take Profit:* {take_profit:.4f} ({reward_pct}%)\n\n*Signal Reasons:*\n"
+            for reason in reasons:
+                message += f"• {reason}\n"
+            message += f"\n_Time: {event_time}_\n⚠️ *Experimental signal. Use caution.*"
+        else:
+            message = f"""
 🚨 *New Trading Signal*
 {'🟢 BUY' if signal_type.lower() == 'buy' else '🔴 SELL'} *{pair}*
 
@@ -895,13 +710,9 @@ class SolanaTradingBot:
 
 *Signal Reasons:*
 """
-        # Add each reason with a bullet point
-        for reason in reasons:
-            message += f"• {reason}\n"
-            
-        message += "\n⚠️ *Always manage your risk and do your own research*"
-        
-        # Send the message asynchronously
+            for reason in reasons:
+                message += f"• {reason}\n"
+            message += f"\n_Time: {event_time}_\n⚠️ *Always manage your risk and do your own research*"
         asyncio.get_event_loop().run_until_complete(self.send_telegram_message(message))
         
     def format_error_message(self, error_type: str, details: str):
@@ -987,21 +798,64 @@ class SolanaTradingBot:
             end_time = int(time.time() * 1000)
             start_time = end_time - (days * 24 * 60 * 60 * 1000)
             
-            # Fetch historical data
-            historical_data = self.exchange.fetch_ohlcv(
-                pair, 
-                self.timeframe, 
-                since=start_time,
-                limit=1000
-            )
+            # Add exponential backoff for rate limiting
+            max_retries = 3
+            retry_delay = 5
             
-            # Convert to DataFrame
-            df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            
-            logger.info(f"Fetched {len(df)} historical candles for {pair} ML training")
-            return df
+            for attempt in range(max_retries):
+                try:
+                    # Fetch historical data with rate limit handling
+                    historical_data = self.exchange.fetch_ohlcv(
+                        pair, 
+                        self.timeframe, 
+                        since=start_time,
+                        limit=1000
+                    )
+                    
+                    if not historical_data:
+                        logger.warning(f"No historical data returned for {pair}")
+                        if attempt < max_retries - 1:
+                            wait_time = retry_delay * (2 ** attempt)
+                            logger.warning(f"Retrying in {wait_time} seconds...")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            logger.error(f"Failed to fetch historical data for {pair} after {max_retries} attempts")
+                            return None
+                    
+                    # Convert to DataFrame
+                    df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    df.set_index('timestamp', inplace=True)
+                    
+                    # Validate data
+                    if len(df) < 100:  # Need at least 100 candles for training
+                        logger.warning(f"Not enough historical data for {pair}: {len(df)} candles")
+                        return None
+                    
+                    logger.info(f"Fetched {len(df)} historical candles for {pair} ML training")
+                    return df
+                    
+                except ccxt.RateLimitExceeded:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Rate limit exceeded for {pair}, waiting {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} due to rate limiting")
+                        return None
+                    
+                except ccxt.NetworkError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(f"Network error for {pair}: {str(e)}, retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for {pair} due to network errors")
+                        return None
+                    
         except Exception as e:
             logger.error(f"Error fetching historical data for {pair}: {e}")
             return None
@@ -1025,8 +879,8 @@ class SolanaTradingBot:
             ema_bearish = current['ema_9'] < current['ema_21'] < current['sma_50']
             
             # Check MACD
-            macd_bullish = current['MACD_12_26_9'] > current['MACDs_12_26_9']
-            macd_bearish = current['MACD_12_26_9'] < current['MACDs_12_26_9']
+            macd_bullish = current['macd'] > current['macd_signal']
+            macd_bearish = current['macd'] < current['macd_signal']
             
             # Check ADX trend strength
             strong_trend = current['adx'] > 25
@@ -1103,17 +957,14 @@ class SolanaTradingBot:
             signals (dict): Dictionary containing signal analysis results
             
         Returns:
-            tuple: (decision, message) where decision is 'BUY', 'SELL', or None
+            tuple: (decision, message) where decision is 'BUY', 'SELL', 'WATCHLIST', or None
         """
         try:
             if not signals:
                 return None, "No valid signals generated"
-                
-            # Check if we have a strong enough signal
-            if signals['confidence'] < 0.7:
-                return None, f"Signal confidence too low: {signals['confidence']:.2f}"
-                
-            # Determine the trading decision
+            # Use the new, lower confidence threshold
+            if signals['confidence'] < self.signal_confidence_threshold:
+                return 'WATCHLIST', f"Watchlist signal (low confidence: {signals['confidence']:.2f})"
             if signals['long']:
                 decision = 'BUY'
                 message = (
@@ -1138,9 +989,7 @@ class SolanaTradingBot:
                 )
             else:
                 return None, "No clear trading direction"
-                
             return decision, message
-            
         except Exception as e:
             logger.error(f"Error generating trading decision: {e}")
             return None, f"Error in decision generation: {str(e)}"
@@ -1185,9 +1034,217 @@ class SolanaTradingBot:
             logger.error(f"Error preparing ML features: {e}")
             return None, None, None
 
+    async def initialize_exchange(self):
+        """Initialize exchange connection with retry logic."""
+        max_retries = 3
+        retry_delay = 5
+        
+        for attempt in range(max_retries):
+            try:
+                self.exchange = ccxt.binance({
+                    'apiKey': self.config['exchange']['api_key'],
+                    'secret': self.config['exchange']['api_secret'],
+                    'enableRateLimit': True,
+                    'options': {
+                        'defaultType': 'future',
+                        'adjustForTimeDifference': True
+                    }
+                })
+                
+                # Test connection
+                await self.exchange.load_markets()
+                logger.info("Exchange connection established successfully")
+                return True
+                
+            except ccxt.NetworkError as e:
+                logger.error(f"Network error connecting to exchange (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.critical("Failed to connect to exchange after maximum retries")
+                    return False
+                    
+            except ccxt.ExchangeError as e:
+                logger.error(f"Exchange error: {e}")
+                return False
+                
+            except Exception as e:
+                logger.error(f"Unexpected error connecting to exchange: {e}")
+                return False
+                
+    async def ensure_exchange_connection(self):
+        """Ensure exchange connection is active, reconnect if necessary."""
+        if not hasattr(self, 'exchange') or not self.exchange:
+            return await self.initialize_exchange()
+            
+        try:
+            # Test connection with a simple API call
+            await self.exchange.fetch_balance()
+            return True
+        except Exception as e:
+            logger.warning(f"Exchange connection lost, attempting to reconnect: {e}")
+            return await self.initialize_exchange()
+
+    async def get_status(self) -> Dict[str, Any]:
+        """Get current bot status"""
+        return {
+            'status': 'running' if self._is_running else 'stopped',
+            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'position': self.active_pairs.get('SOL/USDT', 'No position'),
+            'entry_price': self.active_pairs.get('SOL/USDT', {}).get('entry_price', 0),
+            'pnl': self.active_pairs.get('SOL/USDT', {}).get('pnl', 0),
+            'active_signals': len(self.signal_history.get('SOL/USDT', []))
+        }
+        
+    async def get_current_price_analysis(self) -> Dict[str, Any]:
+        """Get current price and analysis"""
+        try:
+            # Fetch current data
+            df_1h = self.fetch_ohlcv_data('SOL/USDT')
+            if df_1h is None:
+                raise Exception("Failed to fetch price data")
+                
+            # Calculate indicators
+            df_1h = self.calculate_indicators(df_1h)
+            
+            # Get current price
+            current_price = df_1h['close'].iloc[-1]
+            
+            # Calculate 24h change
+            price_24h_ago = df_1h['close'].iloc[-24]
+            change_24h = ((current_price - price_24h_ago) / price_24h_ago) * 100
+            
+            # Get volume
+            volume_24h = df_1h['volume'].iloc[-24:].sum()
+            
+            # Get technical indicators
+            rsi = df_1h['rsi_14'].iloc[-1]
+            macd = "Bullish" if df_1h['macd'].iloc[-1] > df_1h['macd_signal'].iloc[-1] else "Bearish"
+            trend = "Bullish" if df_1h['sma_50'].iloc[-1] > df_1h['sma_200'].iloc[-1] else "Bearish"
+            
+            # Calculate support and resistance
+            support = df_1h['low'].iloc[-20:].min()
+            resistance = df_1h['high'].iloc[-20:].max()
+            
+            return {
+                'price': current_price,
+                'change_24h': change_24h,
+                'volume_24h': volume_24h,
+                'rsi': rsi,
+                'macd': macd,
+                'trend': trend,
+                'support': support,
+                'resistance': resistance
+            }
+        except Exception as e:
+            logger.error(f"Error getting price analysis: {e}")
+            raise
+            
+    async def get_recent_signals(self) -> List[Dict[str, Any]]:
+        """Get recent trading signals"""
+        signals = []
+        for signal in self.signal_history.get('SOL/USDT', [])[-5:]:  # Last 5 signals
+            signals.append({
+                'type': signal['type'],
+                'time': signal['time'].strftime('%Y-%m-%d %H:%M:%S'),
+                'price': signal['price'],
+                'confidence': signal['confidence'],
+                'status': signal['status']
+            })
+        return signals
+        
+    async def get_settings(self) -> Dict[str, Any]:
+        """Get current bot settings"""
+        return {
+            'trading_interval': self.trading_interval_seconds,
+            'ml_threshold': self.ml_prediction_threshold,
+            'signal_threshold': self.signal_confidence_threshold,
+            'retrain_interval': self.retrain_interval_seconds,
+            'risk_reward_ratio': 1.5,  # Fixed for now
+            'max_position_size': 100  # Fixed for now
+        }
+        
+    async def get_market_analysis(self) -> str:
+        """Get current market analysis"""
+        try:
+            df_1h, df_4h, df_1d = self.fetch_ohlcv_data('SOL/USDT')
+            if df_1h is None or df_4h is None or df_1d is None:
+                raise Exception("Failed to fetch market data")
+                
+            # Calculate market context
+            context, strength = self.determine_market_context(df_1h, df_4h, df_1d)
+            
+            # Get current price
+            current_price = df_1h['close'].iloc[-1]
+            
+            # Format analysis
+            analysis = (
+                f"📊 Market Analysis\n\n"
+                f"Current Price: ${current_price:.2f}\n"
+                f"Market Context: {context}\n"
+                f"Trend Strength: {strength:.1%}\n\n"
+                f"Timeframe Analysis:\n"
+                f"1h: {self._get_trend(df_1h)}\n"
+                f"4h: {self._get_trend(df_4h)}\n"
+                f"1d: {self._get_trend(df_1d)}\n\n"
+                f"Key Levels:\n"
+                f"Support: ${df_1h['low'].iloc[-20:].min():.2f}\n"
+                f"Resistance: ${df_1h['high'].iloc[-20:].max():.2f}"
+            )
+            
+            return analysis
+        except Exception as e:
+            logger.error(f"Error getting market analysis: {e}")
+            return "❌ Error fetching market analysis. Please try again later."
+            
+    async def get_latest_signal(self) -> str:
+        """Get the latest trading signal"""
+        try:
+            signals = self.signal_history.get('SOL/USDT', [])
+            if not signals:
+                return "No recent signals available."
+                
+            latest = signals[-1]
+            signal_message = (
+                f"📈 Latest Signal\n\n"
+                f"Type: {latest['type']}\n"
+                f"Time: {latest['time'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Price: ${latest['price']:.2f}\n"
+                f"Confidence: {latest['confidence']}%\n"
+                f"Status: {latest['status']}\n\n"
+                f"Reasons:\n"
+            )
+            
+            for reason in latest.get('reasons', []):
+                signal_message += f"• {reason}\n"
+                
+            return signal_message
+        except Exception as e:
+            logger.error(f"Error getting latest signal: {e}")
+            return "❌ Error fetching latest signal. Please try again later."
+
 if __name__ == "__main__":
     try:
+        # Set up signal handlers for graceful shutdown
+        def signal_handler(sig, frame):
+            logger.info("Shutting down gracefully...")
+            sys.exit(0)
+            
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Create and run the bot
         bot = SolanaTradingBot()
-        asyncio.run(bot.run())
+        
+        # Get or create event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Run the bot
+        loop.run_until_complete(bot.run())
     except Exception as e:
-        logger.critical(f"Fatal error: {e}") 
+        logger.critical(f"Fatal error: {e}")
+        sys.exit(1) 
